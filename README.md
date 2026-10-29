@@ -30,7 +30,7 @@ A static, serverless multiplayer web game combining **Chess ("Capture the King")
 | 🚨 | **Panic!** | Gives your opponent only **10 seconds** to make their next move — if the shot clock expires, their turn is skipped! |
 | 🌀 | **Refuge** | Allows a friendly non-King piece to step **1 square off the edge of the board** into the outer Refuge ring (where it stays until moving back onto an adjacent edge square, or can be captured by an opponent also using Refuge). |
 | 🛡️ | **Pawn Armor** | Equips a friendly Pawn with a **persistent second life**. An attempted capture destroys the armor instead of the Pawn, and the attacking piece stays on its starting square! |
-| 👻 | **Ghost Phase** | For this turn, the chosen friendly non-King piece can **phase through any pieces or walls** when moving or capturing. |
+| 👻 | **Ghost Phase** | For this turn, the chosen friendly non-King piece can **phase through at most 1 piece** when moving or capturing (a King cannot be captured as a result of a passthrough). |
 | 🎰 | **Wheel of Fortune** | Spins a decelerating roulette wheel (with mechanical ticking audio) to randomly transform a friendly non-King piece into a different piece (**10% Pawn, 30% Bishop, 30% Knight, 20% Rook, 10% Queen**). |
 
 ## Running Locally

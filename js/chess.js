@@ -135,8 +135,8 @@ export const POWERUP_DEFS = {
     id: 'ghost',
     name: 'Ghost Phase',
     icon: '👻',
-    shortDesc: 'Piece phases through any pieces/walls this turn',
-    fullDesc: 'For this turn, the chosen friendly non-King piece can phase right through friendly or enemy pieces (and walls) when moving or capturing.',
+    shortDesc: 'Phase through at most 1 piece this turn (cannot capture King via passthrough)',
+    fullDesc: 'For this turn, the chosen friendly non-King piece can phase through at most 1 piece when moving or capturing. A King cannot be captured as a result of a passthrough.',
     targetType: 'friendly_non_king',
   },
   transform: {
@@ -656,13 +656,19 @@ export class FogChessGame {
             if (piece.type === PIECES.BISHOP || piece.type === PIECES.QUEEN) {
               dirs.push([-1, -1], [-1, 1], [1, -1], [1, 1]);
             }
+            const maxBlockers = isGhost ? 1 : 0;
             for (const [dr, dc] of dirs) {
               let nr = r + dr;
               let nc = c + dc;
+              let blockersPassed = 0;
               while (inBounds(nr, nc)) {
                 visible.add(`${nr},${nc}`);
-                if (!isGhost && (this.board[nr][nc] || this.isWall(nr, nc))) {
-                  break;
+                if (this.board[nr][nc] || this.isWall(nr, nc)) {
+                  if (blockersPassed < maxBlockers) {
+                    blockersPassed++;
+                  } else {
+                    break;
+                  }
                 }
                 nr += dr;
                 nc += dc;
@@ -1230,9 +1236,11 @@ export class FogChessGame {
         if (piece.type === PIECES.BISHOP || piece.type === PIECES.QUEEN) {
           dirs.push([-1, -1], [-1, 1], [1, -1], [1, 1]);
         }
+        const maxBlockers = isGhost ? 1 : 0;
         for (const [dr, dc] of dirs) {
           let nr = r + dr;
           let nc = c + dc;
+          let blockersPassed = 0;
           while (inBounds(nr, nc) || canLandOnRefugeRing(nr, nc)) {
             if (inRefugeRing(nr, nc)) {
               moves.push({
@@ -1240,12 +1248,14 @@ export class FogChessGame {
                 to: [nr, nc],
                 capture: Boolean(this.refugePieces.get(`${nr},${nc}`)),
                 toRefuge: true,
+                passedThrough: blockersPassed > 0,
               });
               break;
             }
 
             if (this.isWall(nr, nc)) {
-              if (isGhost) {
+              if (blockersPassed < maxBlockers) {
+                blockersPassed++;
                 nr += dr;
                 nc += dc;
                 continue;
@@ -1255,12 +1265,30 @@ export class FogChessGame {
 
             const target = this.board[nr][nc];
             if (!target) {
-              moves.push({ from: [r, c], to: [nr, nc], capture: false });
+              moves.push({
+                from: [r, c],
+                to: [nr, nc],
+                capture: false,
+                passedThrough: blockersPassed > 0,
+              });
             } else {
-              if (target.color !== color && !this.isShielded(nr, nc)) {
-                moves.push({ from: [r, c], to: [nr, nc], capture: true });
+              const isIllegalKingPassthroughCapture =
+                blockersPassed > 0 && target.type === PIECES.KING;
+              if (
+                target.color !== color &&
+                !this.isShielded(nr, nc) &&
+                !isIllegalKingPassthroughCapture
+              ) {
+                moves.push({
+                  from: [r, c],
+                  to: [nr, nc],
+                  capture: true,
+                  passedThrough: blockersPassed > 0,
+                });
               }
-              if (!isGhost) {
+              if (blockersPassed < maxBlockers) {
+                blockersPassed++;
+              } else {
                 break;
               }
             }

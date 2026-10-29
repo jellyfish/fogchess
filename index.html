@@ -4,10 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FogChess — Powerup Edition (Mario Kart Chess)</title>
-  <link rel="stylesheet" href="css/styles.css?v=7" />
+  <link rel="stylesheet" href="css/styles.css?v=8" />
   <!-- MQTT over Secure WebSockets (WSS) for instant, NAT-proof multiplayer rooms on GitHub Pages -->
   <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-  <script type="module" src="js/app.js?v=7"></script>
+  <script type="module" src="js/app.js?v=8"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -153,7 +153,7 @@
             </li>
             <li>
               <span class="pg-icon">👻</span>
-              <div><strong>Ghost Phase:</strong> Piece phases through any pieces/walls when moving/capturing this turn.</div>
+              <div><strong>Ghost Phase:</strong> Piece can phase through at most 1 piece when moving/capturing this turn (cannot capture a King via passthrough).</div>
             </li>
             <li>
               <span class="pg-icon">🎰</span>

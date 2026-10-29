@@ -9,9 +9,9 @@ import {
   inBounds,
   inRefugeRing,
   rollTransformedPieceType,
-} from './chess.js?v=7';
-import { RoomNetwork, generateRoomCode } from './network.js?v=7';
-import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=7';
+} from './chess.js?v=8';
+import { RoomNetwork, generateRoomCode } from './network.js?v=8';
+import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=8';
 
 class FogChessApp {
   constructor() {
