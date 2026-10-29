@@ -1,13 +1,12 @@
 /**
- * FogChess: Powerup Edition Engine (v5)
+ * FogChess: Powerup Edition Engine (v6)
  *
- * Combines Chess ("Capture the King" ruleset + Check alerts) with Mario Kart-style Mystery Item Boxes:
- * - Board is normally fully visible to both players.
+ * - Full Chess legality: players cannot move into check or leave their King in check.
+ * - Check, Checkmate, and Stalemate detection (plus King capture if an unblocked attack lands).
  * - Rainbow '?' Item Boxes spawn on unoccupied squares in the middle ranks (ranks 3-6),
- *   up to a maximum of 3 boxes on the board at once, with a random 2-5 turn delay before replenishing.
- * - Landing a piece on an Item Box consumes it and grants a random powerup (max 2 held per player).
- * - Players may use up to 2 powerups on a single turn before making their move.
- * - Full state serialization/deserialization so rejoining a room restores the live game & inventories.
+ *   up to 3 on the board at once, with a 1.5–3 turn (3–6 half-turn) replenish delay.
+ * - Players can hold up to 2 powerups and use up to 2 powerups on a single turn before moving.
+ * - Full state serialization/deserialization for seamless room rejoin.
  */
 
 export const COLORS = {
@@ -30,7 +29,7 @@ export const POWERUP_DEFS = {
     name: 'Fog Cloud',
     icon: '🌫️',
     shortDesc: 'Blind opponent with Fog of War for 1–3 turns',
-    fullDesc: 'Inflicts Fog of War on your opponent for 1–3 of their turns (they only see what their pieces see, while you see the full board).',
+    fullDesc: 'Inflicts Fog of War on your opponent for 1–3 of their turns (they only see what their pieces see, while you see the full board and which of your pieces are hidden).',
     targetType: 'none',
   },
   wall: {
@@ -54,7 +53,7 @@ export const POWERUP_DEFS = {
     name: 'Ice Freeze',
     icon: '❄️',
     shortDesc: 'Freeze 1 enemy non-King piece for their next turn',
-    fullDesc: 'Encases a visible enemy non-King piece in ice so it cannot move on their upcoming turn.',
+    fullDesc: 'Encases a visible enemy non-King piece in ice so it cannot move or attack on their upcoming turn.',
     targetType: 'enemy_non_king',
   },
   feather: {
@@ -104,11 +103,10 @@ export function randomPowerupId() {
 }
 
 /**
- * Rolls a random replenishment delay of 2 to 5 full turns (4 to 10 half-turns).
+ * Rolls a slightly faster replenishment delay of 3 to 6 half-turns (1.5 to 3 full turns).
  */
 export function rollReplenishDelayHalfTurns() {
-  const fullTurns = Math.floor(Math.random() * 4) + 2; // 2, 3, 4, or 5 full turns
-  return fullTurns * 2;
+  return Math.floor(Math.random() * 4) + 3; // 3, 4, 5, or 6 half-turns
 }
 
 export class FogChessGame {
@@ -131,38 +129,30 @@ export class FogChessGame {
     this.winner = null;
     this.winReason = null;
 
-    // Powerup & status state
     this.itemBoxes = new Set();
     this.inventories = {
       w: [],
       b: [],
     };
     this.powerupsUsedThisTurn = 0;
-    // Countdown in half-turns before another '?' box spawns (2-5 full turns = 4-10 half-turns)
     this.turnsUntilNextSpawn = rollReplenishDelayHalfTurns();
 
-    // Active board/player effects:
     this.fogTurns = { w: 0, b: 0 };
-    this.walls = new Map(); // "r,c" -> remaining half-turns
-    this.shields = new Map(); // "r,c" -> { color, turnsLeft }
-    this.frozen = new Map(); // "r,c" -> { color, turnsLeft }
-    this.featherSquares = new Set(); // "r,c"
+    this.walls = new Map();
+    this.shields = new Map();
+    this.frozen = new Map();
+    this.featherSquares = new Set();
 
     if (Array.isArray(initialItemCoords)) {
       for (const [r, c] of initialItemCoords) {
         this.itemBoxes.add(`${r},${c}`);
       }
     } else {
-      // Spawn 2 initial mystery boxes on middle ranks (rows 2..5)
       this.spawnRandomItemBox();
       this.spawnRandomItemBox();
     }
   }
 
-  /**
-   * Serializes the entire live match state (including both players' powerups, active effects,
-   * board, turn, and move history) so a joining/rejoining client can restore it without resetting.
-   */
   serializeState() {
     return {
       board: this.board.map((row) => row.map((cell) => (cell ? { ...cell } : null))),
@@ -196,9 +186,6 @@ export class FogChessGame {
     };
   }
 
-  /**
-   * Restores a serialized match state onto this game instance.
-   */
   loadState(state) {
     if (!state || !Array.isArray(state.board)) return false;
 
@@ -314,9 +301,6 @@ export class FogChessGame {
     return (this.fogTurns[color] || 0) > 0;
   }
 
-  /**
-   * Finds the [r, c] coordinates of `color`'s King, or null if captured.
-   */
   findKingSquare(color) {
     for (let r = 0; r < 8; r++) {
       for (let c = 0; c < 8; c++) {
@@ -330,22 +314,68 @@ export class FogChessGame {
   }
 
   /**
-   * Returns true if `color`'s King is currently under attack (in Check) by any enemy piece.
-   * Respects Stone Walls and Frozen enemy pieces.
+   * Returns true if square (targetR, targetC) is currently attacked by any piece of `attackerColor`.
+   * Respects Stone Walls and Ice Freeze.
+   */
+  isSquareAttackedBy(targetR, targetC, attackerColor) {
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const piece = this.board[r][c];
+        if (!piece || piece.color !== attackerColor) continue;
+        if (this.isFrozen(r, c)) continue;
+
+        const pseudo = this.getPseudoMovesFrom(r, c, true);
+        if (pseudo.some((m) => m.to[0] === targetR && m.to[1] === targetC)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Returns true if `color`'s King is currently in Check.
    */
   isKingInCheck(color) {
-    if (this.winner) return false;
     const kingSq = this.findKingSquare(color);
     if (!kingSq) return false;
-    const [kr, kc] = kingSq;
-    const attackerColor = oppositeColor(color);
-    const enemyMoves = this.getAllMoves(attackerColor);
-    return enemyMoves.some((m) => m.to[0] === kr && m.to[1] === kc);
+    return this.isSquareAttackedBy(kingSq[0], kingSq[1], oppositeColor(color));
+  }
+
+  /**
+   * Simulates a pseudo-legal move and returns true if it leaves `moverColor`'s King in Check.
+   */
+  wouldMoveLeaveKingInCheck(move, moverColor) {
+    const [r1, c1] = move.from;
+    const [r2, c2] = move.to;
+
+    const savedFrom = this.board[r1][c1];
+    const savedTo = this.board[r2][c2];
+    let savedEp = null;
+    if (move.enPassant) {
+      savedEp = this.board[r1][c2];
+      this.board[r1][c2] = null;
+    }
+
+    this.board[r2][c2] = savedFrom;
+    this.board[r1][c1] = null;
+
+    const inCheck = this.isKingInCheck(moverColor);
+
+    // Restore board
+    this.board[r1][c1] = savedFrom;
+    this.board[r2][c2] = savedTo;
+    if (move.enPassant) {
+      this.board[r1][c2] = savedEp;
+    }
+
+    return inCheck;
   }
 
   /**
    * Computes the set of visible squares (as "r,c" strings) for `viewerColor`.
-   * If `viewerColor` is NOT currently affected by Fog Cloud, all 64 squares are visible!
+   * If `viewerColor` is NOT currently affected by Fog Cloud (and `forceComputeSight` is false),
+   * all 64 squares are visible.
    */
   getVisibleSquares(viewerColor, forceComputeSight = false) {
     const visible = new Set();
@@ -433,7 +463,7 @@ export class FogChessGame {
                 }
               }
             }
-            const castleMoves = this.getCastlingMoves(r, c, viewerColor);
+            const castleMoves = this.getCastlingMoves(r, c, viewerColor, true);
             for (const cm of castleMoves) {
               visible.add(`${cm.to[0]},${cm.to[1]}`);
             }
@@ -471,10 +501,6 @@ export class FogChessGame {
     return visible;
   }
 
-  /**
-   * Validates and executes a powerup activation before the current player's move.
-   * Players may use up to 2 powerups (their entire inventory) on a single turn!
-   */
   usePowerup(color, slotIndex, params = {}) {
     if (this.winner || color !== this.turn) {
       return { ok: false, reason: 'You can only use powerups on your turn.' };
@@ -492,9 +518,11 @@ export class FogChessGame {
     const result = this.applyPowerupEffect(color, powerupId, params);
     if (!result.ok) return result;
 
-    // Remove from inventory & increment counter
     inv.splice(slotIndex, 1);
     this.powerupsUsedThisTurn++;
+
+    // Re-evaluate if current player is still stuck with 0 moves and no remaining rescue powerups
+    this.checkEndOfGameCondition();
 
     return {
       ok: true,
@@ -508,7 +536,7 @@ export class FogChessGame {
 
     switch (powerupId) {
       case 'fog': {
-        const duration = params.duration || (Math.floor(Math.random() * 3) + 1); // 1 to 3 turns
+        const duration = params.duration || (Math.floor(Math.random() * 3) + 1);
         this.fogTurns[oppColor] = (this.fogTurns[oppColor] || 0) + duration;
         return {
           ok: true,
@@ -618,9 +646,20 @@ export class FogChessGame {
           return { ok: false, reason: 'Cannot swap a Pawn directly onto the promotion rank.' };
         }
 
+        const wasInCheck = this.isKingInCheck(color);
+
+        // Swap pieces on board
         this.board[r1][c1] = p2;
         this.board[r2][c2] = p1;
 
+        if (!wasInCheck && this.isKingInCheck(color)) {
+          // Revert swap if it exposes own King to Check
+          this.board[r1][c1] = p1;
+          this.board[r2][c2] = p2;
+          return { ok: false, reason: 'Cannot swap pieces if it exposes your King to Check!' };
+        }
+
+        // Ensure swapping doesn't illegally leave player in check with 0 legal moves
         const key1 = `${r1},${c1}`;
         const key2 = `${r2},${c2}`;
         this.swapMapKeys(this.shields, key1, key2);
@@ -667,13 +706,13 @@ export class FogChessGame {
   }
 
   /**
-   * Returns all legal moves for the piece at (r, c), respecting Walls, Star Shields, Ice Freeze, and Feather Jump.
+   * Generates pseudo-legal moves for the piece at (r, c) without filtering for self-check.
+   * When `forAttackCheck` is true, omits castling to avoid recursion and only checks attackable squares.
    */
-  getMovesFrom(r, c) {
-    if (this.winner) return [];
+  getPseudoMovesFrom(r, c, forAttackCheck = false) {
     const piece = this.board[r][c];
-    if (!piece || piece.color !== this.turn) return [];
-
+    if (!piece) return [];
+    if (!forAttackCheck && piece.color !== this.turn) return [];
     if (this.isFrozen(r, c)) return [];
 
     const moves = [];
@@ -695,26 +734,29 @@ export class FogChessGame {
         const dir = color === COLORS.WHITE ? -1 : 1;
         const startRank = color === COLORS.WHITE ? 6 : 1;
 
-        const r1 = r + dir;
-        if (inBounds(r1, c) && !this.board[r1][c] && !this.isWall(r1, c)) {
-          moves.push({
-            from: [r, c],
-            to: [r1, c],
-            promotion: r1 === promoRank,
-          });
-
-          const r2 = r + 2 * dir;
-          if (
-            r === startRank &&
-            inBounds(r2, c) &&
-            !this.board[r2][c] &&
-            !this.isWall(r2, c)
-          ) {
+        // Pawn forward moves are not attacks
+        if (!forAttackCheck) {
+          const r1 = r + dir;
+          if (inBounds(r1, c) && !this.board[r1][c] && !this.isWall(r1, c)) {
             moves.push({
               from: [r, c],
-              to: [r2, c],
-              doublePawnPush: true,
+              to: [r1, c],
+              promotion: r1 === promoRank,
             });
+
+            const r2 = r + 2 * dir;
+            if (
+              r === startRank &&
+              inBounds(r2, c) &&
+              !this.board[r2][c] &&
+              !this.isWall(r2, c)
+            ) {
+              moves.push({
+                from: [r, c],
+                to: [r2, c],
+                doublePawnPush: true,
+              });
+            }
           }
         }
 
@@ -722,6 +764,11 @@ export class FogChessGame {
           const nr = r + dir;
           const nc = c + dc;
           if (!inBounds(nr, nc) || this.isWall(nr, nc)) continue;
+
+          if (forAttackCheck) {
+            moves.push({ from: [r, c], to: [nr, nc], capture: true });
+            continue;
+          }
 
           const target = this.board[nr][nc];
           if (target && target.color !== color && !this.isShielded(nr, nc)) {
@@ -782,7 +829,9 @@ export class FogChessGame {
             }
           }
         }
-        moves.push(...this.getCastlingMoves(r, c, color));
+        if (!forAttackCheck) {
+          moves.push(...this.getCastlingMoves(r, c, color, false));
+        }
         break;
       }
 
@@ -843,7 +892,20 @@ export class FogChessGame {
     return moves;
   }
 
-  getCastlingMoves(r, c, color) {
+  /**
+   * Returns strictly legal moves for the piece at (r, c) — filters out any move that
+   * puts or leaves the moving player's King in Check!
+   */
+  getMovesFrom(r, c) {
+    if (this.winner) return [];
+    const piece = this.board[r][c];
+    if (!piece || piece.color !== this.turn) return [];
+
+    const pseudoMoves = this.getPseudoMovesFrom(r, c, false);
+    return pseudoMoves.filter((m) => !this.wouldMoveLeaveKingInCheck(m, piece.color));
+  }
+
+  getCastlingMoves(r, c, color, skipCheckValidation = false) {
     const moves = [];
     const homeRank = color === COLORS.WHITE ? 7 : 0;
     if (r !== homeRank || c !== 4) return moves;
@@ -852,6 +914,13 @@ export class FogChessGame {
     const rights = this.castlingRights[color];
     if (!rights) return moves;
 
+    const enemyColor = oppositeColor(color);
+    // Cannot castle out of check
+    if (!skipCheckValidation && this.isSquareAttackedBy(homeRank, 4, enemyColor)) {
+      return moves;
+    }
+
+    // Kingside castling
     if (
       rights.k &&
       !this.board[homeRank][5] &&
@@ -862,13 +931,20 @@ export class FogChessGame {
       this.board[homeRank][7]?.type === PIECES.ROOK &&
       this.board[homeRank][7]?.color === color
     ) {
-      moves.push({
-        from: [homeRank, 4],
-        to: [homeRank, 6],
-        castling: 'k',
-      });
+      const transitSafe =
+        skipCheckValidation ||
+        (!this.isSquareAttackedBy(homeRank, 5, enemyColor) &&
+          !this.isSquareAttackedBy(homeRank, 6, enemyColor));
+      if (transitSafe) {
+        moves.push({
+          from: [homeRank, 4],
+          to: [homeRank, 6],
+          castling: 'k',
+        });
+      }
     }
 
+    // Queenside castling
     if (
       rights.q &&
       !this.board[homeRank][3] &&
@@ -881,11 +957,17 @@ export class FogChessGame {
       this.board[homeRank][0]?.type === PIECES.ROOK &&
       this.board[homeRank][0]?.color === color
     ) {
-      moves.push({
-        from: [homeRank, 4],
-        to: [homeRank, 2],
-        castling: 'q',
-      });
+      const transitSafe =
+        skipCheckValidation ||
+        (!this.isSquareAttackedBy(homeRank, 3, enemyColor) &&
+          !this.isSquareAttackedBy(homeRank, 2, enemyColor));
+      if (transitSafe) {
+        moves.push({
+          from: [homeRank, 4],
+          to: [homeRank, 2],
+          castling: 'q',
+        });
+      }
     }
 
     return moves;
@@ -908,7 +990,32 @@ export class FogChessGame {
   }
 
   /**
-   * Executes a move `{ from: [r1, c1], to: [r2, c2] }`.
+   * Checks if `color` has any board-altering powerup in hand that could potentially create a legal move
+   * when currently in check / having 0 legal moves.
+   */
+  hasPotentialRescuePowerup(color) {
+    if (this.powerupsUsedThisTurn >= MAX_INVENTORY_SLOTS) return false;
+    const inv = this.inventories[color] || [];
+    const rescueTypes = new Set(['wall', 'freeze', 'feather', 'swap']);
+    return inv.some((id) => rescueTypes.has(id));
+  }
+
+  checkEndOfGameCondition() {
+    if (this.winner) return;
+    const legalMoves = this.getAllMoves(this.turn);
+    if (legalMoves.length === 0 && !this.hasPotentialRescuePowerup(this.turn)) {
+      if (this.isKingInCheck(this.turn)) {
+        this.winner = oppositeColor(this.turn);
+        this.winReason = 'Checkmate';
+      } else {
+        this.winner = 'draw';
+        this.winReason = 'Stalemate';
+      }
+    }
+  }
+
+  /**
+   * Executes a legal move `{ from: [r1, c1], to: [r2, c2] }`.
    */
   makeMove(from, to, promotionPiece = PIECES.QUEEN, options = {}) {
     const [r1, c1] = from;
@@ -1004,14 +1111,11 @@ export class FogChessGame {
       } else {
         inventoryWasFull = true;
       }
-      // If picking up this box dropped the board below max capacity, or to enforce a 2-5 turn delay
-      // after a pickup, ensure turnsUntilNextSpawn is at least a fresh 2-5 turn delay!
       if (wasAtMaxBoxesBeforeMove || this.turnsUntilNextSpawn <= 2) {
         this.turnsUntilNextSpawn = rollReplenishDelayHalfTurns();
       }
     }
 
-    // Tick down turn-based effects at the end of this player's move
     if (this.fogTurns[moverColor] > 0) {
       this.fogTurns[moverColor]--;
     }
@@ -1034,8 +1138,7 @@ export class FogChessGame {
     this.featherSquares.clear();
     this.powerupsUsedThisTurn = 0;
 
-    // Handle delayed replenishment of '?' item boxes (2-5 full turns = 4-10 half-turns)
-    // Never spawn on the exact same move a box was picked up!
+    // Handle delayed replenishment of '?' item boxes (3-6 half-turns)
     let spawnedItem = null;
     if ('spawnedItem' in options) {
       if (options.spawnedItem) {
@@ -1086,6 +1189,8 @@ export class FogChessGame {
       this.fullMoveNumber++;
     }
     this.turn = oppositeColor(this.turn);
+
+    this.checkEndOfGameCondition();
 
     return moveRecord;
   }

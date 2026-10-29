@@ -6,9 +6,9 @@ import {
   MAX_INVENTORY_SLOTS,
   coordsToAlgebraic,
   oppositeColor,
-} from './chess.js?v=5';
-import { RoomNetwork, generateRoomCode } from './network.js?v=5';
-import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=5';
+} from './chess.js?v=6';
+import { RoomNetwork, generateRoomCode } from './network.js?v=6';
+import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=6';
 
 class FogChessApp {
   constructor() {
@@ -978,6 +978,9 @@ class FogChessApp {
     const amIFogged = this.game.isPlayerFogged(this.myColor);
     const oppColor = oppositeColor(this.myColor);
     const isOppFogged = this.game.isPlayerFogged(oppColor);
+    const oppVisibleSquares = isOppFogged
+      ? this.game.getVisibleSquares(oppColor, true)
+      : null;
 
     const whiteInCheck = this.game.isKingInCheck(COLORS.WHITE);
     const blackInCheck = this.game.isKingInCheck(COLORS.BLACK);
@@ -988,7 +991,7 @@ class FogChessApp {
       this.visibleCountBadge.className = 'sight-badge badge-fog-active';
     } else if (isOppFogged) {
       const t = this.game.fogTurns[oppColor];
-      this.visibleCountBadge.textContent = `🌫️ Opponent Blinded (${t} turn${t > 1 ? 's' : ''}) • Full Vision`;
+      this.visibleCountBadge.textContent = `🌫️ Opponent Blinded (${t} turn${t > 1 ? 's' : ''} left) • Faded pieces are hidden from foe`;
       this.visibleCountBadge.className = 'sight-badge badge-opp-fogged';
     } else {
       this.visibleCountBadge.textContent = `Full Board Vision • ${this.game.itemBoxes.size}/3 ? Boxes on board`;
@@ -1010,6 +1013,9 @@ class FogChessApp {
         const sqKey = `${r},${c}`;
         const isLight = (r + c) % 2 === 0;
         const isVisible = visibleSquares.has(sqKey);
+        const isHiddenFromOpp = Boolean(
+          isOppFogged && oppVisibleSquares && !oppVisibleSquares.has(sqKey)
+        );
 
         const sqEl = document.createElement('div');
         sqEl.className = `square ${isLight ? 'sq-light' : 'sq-dark'}`;
@@ -1023,6 +1029,9 @@ class FogChessApp {
           sqEl.classList.add('sq-fog-peek');
         } else {
           sqEl.classList.add('sq-visible');
+          if (isHiddenFromOpp) {
+            sqEl.classList.add('sq-opp-fogged');
+          }
         }
 
         if (
@@ -1053,8 +1062,10 @@ class FogChessApp {
         // 1. Render Rainbow '?' Item Box if present and square is visible
         if (this.game.itemBoxes.has(sqKey) && (isVisible || revealAll)) {
           const itemBoxEl = document.createElement('div');
-          itemBoxEl.className = 'item-box-cube';
-          itemBoxEl.title = 'Mystery Powerup Box — Land here to collect!';
+          itemBoxEl.className = `item-box-cube ${isHiddenFromOpp ? 'item-hidden-in-fog' : ''}`;
+          itemBoxEl.title = isHiddenFromOpp
+            ? 'Mystery Powerup Box (Hidden in fog from opponent)'
+            : 'Mystery Powerup Box — Land here to collect!';
           itemBoxEl.innerHTML = `<span class="item-box-q">?</span>`;
           sqEl.appendChild(itemBoxEl);
         }
@@ -1074,6 +1085,12 @@ class FogChessApp {
         if (piece && (isVisible || revealAll || piece.color === this.myColor)) {
           const pieceWrapper = document.createElement('div');
           pieceWrapper.className = 'piece-container';
+
+          const isThisPieceStealthed = isHiddenFromOpp && piece.color === this.myColor;
+          if (isThisPieceStealthed) {
+            pieceWrapper.classList.add('piece-hidden-in-fog');
+            sqEl.title = 'Hidden in your Fog Cloud — Opponent cannot see this piece!';
+          }
 
           // Highlight King in Check!
           const isThisKingInCheck =
@@ -1105,6 +1122,7 @@ class FogChessApp {
           if (this.game.isShielded(r, c)) badges.push('⭐');
           if (this.game.isFrozen(r, c)) badges.push('❄️');
           if (this.game.hasFeather(r, c)) badges.push('🪶');
+          if (isThisPieceStealthed) badges.push('🌫️');
           if (badges.length > 0) {
             const badgeEl = document.createElement('div');
             badgeEl.className = 'piece-status-badge';
@@ -1166,6 +1184,14 @@ class FogChessApp {
     }
 
     if (this.game.winner) {
+      if (this.game.winner === 'draw') {
+        this.turnBanner.textContent = `Draw (${this.game.winReason})!`;
+        this.turnBanner.className = 'turn-banner banner-waiting';
+        this.gameOverTitle.textContent = 'Stalemate!';
+        this.gameOverSubtitle.textContent = `Match ended in a draw by ${this.game.winReason}.`;
+        this.gameOverBanner.classList.remove('hidden');
+        return;
+      }
       const winnerName = this.game.winner === COLORS.WHITE ? 'White' : 'Black';
       const didIWin = this.game.winner === this.myColor;
       this.turnBanner.textContent = `${winnerName} wins (${this.game.winReason})!`;
