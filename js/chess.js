@@ -1078,7 +1078,10 @@ export class FogChessGame {
     const color = piece.color;
     const promoRank = color === COLORS.WHITE ? 0 : 7;
     const isGhost = this.hasGhost(r, c);
-    const canEnterRefuge = !forAttackCheck && this.hasRefugeReady(r, c);
+    const canEnterRefuge =
+      !forAttackCheck &&
+      piece.type !== PIECES.KING &&
+      this.hasRefugeReady(r, c);
 
     const canLandOnBoard = (nr, nc) => {
       if (!inBounds(nr, nc)) return false;
