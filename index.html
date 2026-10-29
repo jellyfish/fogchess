@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FogChess — Multiplayer Fog of War Chess</title>
+  <link rel="stylesheet" href="css/styles.css" />
+  <!-- PeerJS for 100% static GitHub Pages WebRTC P2P multiplayer rooms -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Header -->
+    <header class="top-header">
+      <div class="brand">
+        <div class="brand-logo" aria-hidden="true">🌫️</div>
+        <div>
+          <h1>FogChess</h1>
+          <p class="brand-tagline">Tactical Chess in the Fog of War</p>
+        </div>
+      </div>
+
+      <div class="header-status">
+        <div id="connection-badge" class="status-badge status-idle">
+          <span class="status-dot"></span>
+          <span id="connection-text">Not in a room</span>
+        </div>
+        <button id="btn-practice-bot" class="btn btn-secondary btn-sm" title="Play against a local bot that obeys Fog of War">
+          Practice vs. Bot
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Grid -->
+    <main class="main-grid">
+      <!-- Left Column: Multiplayer Room & Rules -->
+      <aside class="panel left-panel">
+        <section class="card">
+          <h2 class="card-title">Multiplayer Room</h2>
+          <p class="card-desc">
+            Peer-to-peer WebRTC rooms — hosted statically on GitHub Pages with zero backend servers.
+          </p>
+
+          <!-- Setup State (Create or Join) -->
+          <div id="lobby-setup-panel" class="lobby-stack">
+            <div class="create-room-box">
+              <label for="select-host-color" class="field-label">Host Color</label>
+              <div class="row-gap">
+                <select id="select-host-color" class="input-select">
+                  <option value="w">Play as White</option>
+                  <option value="b">Play as Black</option>
+                  <option value="random">Random Color</option>
+                </select>
+                <button id="btn-create-room" class="btn btn-primary">
+                  Create Room
+                </button>
+              </div>
+            </div>
+
+            <div class="divider"><span>OR JOIN EXISTING</span></div>
+
+            <div class="join-room-box">
+              <label for="input-room-code" class="field-label">Room Code</label>
+              <div class="row-gap">
+                <input
+                  id="input-room-code"
+                  type="text"
+                  maxlength="8"
+                  placeholder="e.g. K7M9P2"
+                  class="input-text code-input"
+                  autocomplete="off"
+                />
+                <button id="btn-join-room" class="btn btn-accent">
+                  Join
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Active Room State -->
+          <div id="active-room-panel" class="active-room-box hidden">
+            <div class="room-code-banner">
+              <span class="room-code-label">ROOM CODE</span>
+              <strong id="room-code-display" class="room-code-value">------</strong>
+            </div>
+
+            <div class="button-grid-2">
+              <button id="btn-copy-code" class="btn btn-secondary btn-sm">
+                Copy Code
+              </button>
+              <button id="btn-copy-link" class="btn btn-secondary btn-sm">
+                Copy Invite Link
+              </button>
+            </div>
+
+            <button id="btn-open-second-tab" class="btn btn-accent btn-full">
+              Open 2nd Player Tab (Test Locally)
+            </button>
+
+            <button id="btn-leave-room" class="btn btn-danger-outline btn-sm btn-full">
+              Leave Room
+            </button>
+          </div>
+        </section>
+
+        <!-- Fog Rules & Assumptions Card -->
+        <section class="card rules-card">
+          <h2 class="card-title">Fog of War Rules</h2>
+          <ul class="rules-list">
+            <li>
+              <strong>Full Piece Sight:</strong> You only see squares occupied by your pieces and squares your pieces can currently reach or attack.
+            </li>
+            <li>
+              <strong>Pawn Sight:</strong> Pawns always illuminate their <strong>two forward-diagonal squares</strong> (even when empty) plus 1 square straight ahead (and 2 squares ahead from their starting rank if unblocked).
+            </li>
+            <li>
+              <strong>Line of Sight:</strong> Rooks, Bishops, and Queens illuminate rays up to and including the first blocking piece, and cannot see behind blockers.
+            </li>
+            <li>
+              <strong>Capture the King:</strong> There is <em>no check or checkmate</em>. Moving into an attacked square is legal. Win by capturing the enemy King!
+            </li>
+          </ul>
+        </section>
+      </aside>
+
+      <!-- Center Column: The Chessboard -->
+      <section class="board-stage">
+        <div class="hud-top-bar">
+          <div class="hud-badges">
+            <span id="my-role-badge" class="role-badge role-w">Playing as White</span>
+            <span id="visible-count-badge" class="sight-badge">32 / 64 squares visible</span>
+          </div>
+          <div class="board-actions">
+            <button id="btn-peek-fog" class="btn btn-secondary btn-xs hidden" title="Toggle fog visibility in Practice Mode">
+              Peek Through Fog
+            </button>
+            <button id="btn-flip-board" class="btn btn-secondary btn-xs">
+              Flip Board
+            </button>
+          </div>
+        </div>
+
+        <div id="turn-banner" class="turn-banner banner-waiting">
+          Create or join a room (or click Practice vs. Bot) to begin
+        </div>
+
+        <div class="board-outer-frame">
+          <div id="rank-labels" class="rank-labels"></div>
+          <div class="board-inner-wrap">
+            <div id="chessboard" class="chessboard" role="grid" aria-label="Fog of War Chessboard"></div>
+
+            <!-- Game Over Overlay Banner -->
+            <div id="game-over-banner" class="game-over-overlay hidden">
+              <div class="game-over-card">
+                <h3 id="game-over-title">Victory!</h3>
+                <p id="game-over-subtitle">King captured. The fog has been lifted.</p>
+                <button id="btn-banner-rematch" class="btn btn-primary">
+                  Play Rematch (Swap Colors)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="file-labels" class="file-labels"></div>
+      </section>
+
+      <!-- Right Column: Captures, Move Log & Match Controls -->
+      <aside class="panel right-panel">
+        <section class="card">
+          <h2 class="card-title">Captured Pieces</h2>
+          <div class="captures-box">
+            <div class="capture-row">
+              <span class="capture-label">White lost:</span>
+              <div id="captured-white" class="captured-tray"></div>
+            </div>
+            <div class="capture-row">
+              <span class="capture-label">Black lost:</span>
+              <div id="captured-black" class="captured-tray"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card move-log-card">
+          <div class="card-header-inline">
+            <h2 class="card-title">Intel Move Log</h2>
+            <span class="intel-tag">Fog-Filtered</span>
+          </div>
+          <div id="move-list" class="move-list"></div>
+          <div class="match-controls">
+            <button id="btn-rematch" class="btn btn-secondary btn-sm">
+              New Game / Rematch
+            </button>
+            <button id="btn-resign" class="btn btn-danger-outline btn-sm">
+              Resign
+            </button>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <!-- Pawn Promotion Modal -->
+  <div id="promotion-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <h3>Promote Pawn</h3>
+      <p>Choose a piece to promote your pawn to:</p>
+      <div id="promotion-choices" class="promotion-grid"></div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast-notification" class="toast hidden" role="status" aria-live="polite"></div>
+</body>
+</html>
