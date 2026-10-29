@@ -6,9 +6,12 @@ import {
   MAX_INVENTORY_SLOTS,
   coordsToAlgebraic,
   oppositeColor,
-} from './chess.js?v=6';
-import { RoomNetwork, generateRoomCode } from './network.js?v=6';
-import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=6';
+  inBounds,
+  inRefugeRing,
+  rollTransformedPieceType,
+} from './chess.js?v=7';
+import { RoomNetwork, generateRoomCode } from './network.js?v=7';
+import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=7';
 
 class FogChessApp {
   constructor() {
@@ -24,8 +27,17 @@ class FogChessApp {
     this.hasSyncedInitialState = false;
 
     // Powerup targeting state:
-    // null or { slotIndex, powerupId, step, firstSquare?: [r, c] }
+    // null or { slotIndex, powerupId, step, firstSquare?: [r, c], resurrectPieceType?: string }
     this.targetingState = null;
+
+    // Active Wheel of Fortune animation state
+    this.wheelAnimating = false;
+    this.audioCtx = null;
+
+    // Active Panic 10-second timer state
+    this.panicTimerInterval = null;
+    this.panicDeadline = null;
+    this.panicTurnKey = null;
 
     this.network = new RoomNetwork({
       onStatusChange: (state, text) => this.handleNetworkStatus(state, text),
@@ -41,10 +53,88 @@ class FogChessApp {
     this.renderAll();
   }
 
+  getAudioContext() {
+    if (!this.audioCtx) {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        this.audioCtx = new AudioCtx();
+      }
+    }
+    if (this.audioCtx && this.audioCtx.state === 'suspended') {
+      this.audioCtx.resume().catch(() => {});
+    }
+    return this.audioCtx;
+  }
+
+  /**
+   * Synthesizes a crisp mechanical Wheel-of-Fortune click/tick sound using Web Audio API.
+   */
+  playWheelTickSound(stepIndex, totalSteps) {
+    try {
+      const ctx = this.getAudioContext();
+      if (!ctx) return;
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      const baseFreq = 520 + (stepIndex / totalSteps) * 260;
+      osc.frequency.setValueAtTime(baseFreq, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(180, ctx.currentTime + 0.035);
+
+      gain.gain.setValueAtTime(0.18, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.038);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.04);
+    } catch (_) {}
+  }
+
+  /**
+   * Synthesizes a short celebratory chime when the Wheel of Fortune lands on its final piece.
+   */
+  playWheelFanfareSound() {
+    try {
+      const ctx = this.getAudioContext();
+      if (!ctx) return;
+
+      const notes = [523.25, 659.25, 783.99, 1046.5];
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        const startTime = ctx.currentTime + i * 0.07;
+        osc.frequency.setValueAtTime(freq, startTime);
+        gain.gain.setValueAtTime(0.15, startTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.22);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(startTime);
+        osc.stop(startTime + 0.23);
+      });
+    } catch (_) {}
+  }
+
+  playPanicBeepSound() {
+    try {
+      const ctx = this.getAudioContext();
+      if (!ctx) return;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      gain.gain.setValueAtTime(0.09, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.085);
+    } catch (_) {}
+  }
+
   cacheDOM() {
     this.boardEl = document.getElementById('chessboard');
-    this.rankLabelsEl = document.getElementById('rank-labels');
-    this.fileLabelsEl = document.getElementById('file-labels');
 
     // Room & Lobby elements
     this.createRoomBtn = document.getElementById('btn-create-room');
@@ -64,6 +154,8 @@ class FogChessApp {
     this.connectionBadge = document.getElementById('connection-badge');
     this.connectionText = document.getElementById('connection-text');
     this.turnBanner = document.getElementById('turn-banner');
+    this.panicBannerEl = document.getElementById('panic-banner');
+    this.panicTimerTextEl = document.getElementById('panic-timer-text');
     this.myRoleBadge = document.getElementById('my-role-badge');
     this.checkAlertBadge = document.getElementById('check-alert-badge');
     this.visibleCountBadge = document.getElementById('visible-count-badge');
@@ -86,6 +178,8 @@ class FogChessApp {
 
     // Modals
     this.promotionModal = document.getElementById('promotion-modal');
+    this.promotionTitleEl = document.getElementById('promotion-modal-title');
+    this.promotionDescEl = document.getElementById('promotion-modal-desc');
     this.promotionChoices = document.getElementById('promotion-choices');
     this.gameOverBanner = document.getElementById('game-over-banner');
     this.gameOverTitle = document.getElementById('game-over-title');
@@ -139,6 +233,7 @@ class FogChessApp {
       const oldCode = this.network.roomCode;
       this.network.cleanup(true);
       this.clearRoomSnapshot(oldCode);
+      this.clearPanicCountdown();
       this.activeRoomPanel.classList.add('hidden');
       this.lobbySetupPanel.classList.remove('hidden');
       window.history.replaceState({}, '', window.location.pathname);
@@ -148,6 +243,7 @@ class FogChessApp {
 
     this.practiceBotBtn.addEventListener('click', () => {
       this.network.cleanup(true);
+      this.clearPanicCountdown();
       this.mode = 'bot';
       this.activeRoomPanel.classList.add('hidden');
       this.lobbySetupPanel.classList.remove('hidden');
@@ -177,6 +273,7 @@ class FogChessApp {
     this.resignBtn.addEventListener('click', () => {
       if (this.game.winner) return;
       this.game.resign(this.myColor);
+      this.clearPanicCountdown();
       this.saveRoomSnapshot();
       if (this.mode === 'online' && this.network.connected) {
         this.network.send({ type: 'RESIGN', color: this.myColor });
@@ -186,6 +283,7 @@ class FogChessApp {
 
     const triggerRematch = () => {
       const nextColor = oppositeColor(this.myColor);
+      this.clearPanicCountdown();
       this.resetMatch(nextColor);
       this.saveRoomSnapshot();
       if (this.mode === 'online' && this.network.connected) {
@@ -280,7 +378,6 @@ class FogChessApp {
     this.fogPeekDebug = false;
     this.peekFogBtn.classList.add('hidden');
 
-    // If this tab was previously in this room (e.g. accidental page reload), restore its snapshot first!
     const snapshot = this.loadRoomSnapshot(code);
     if (snapshot && snapshot.state) {
       this.game.loadState(snapshot.state);
@@ -302,6 +399,7 @@ class FogChessApp {
   }
 
   resetMatch(myColor, initialItems = null) {
+    this.clearPanicCountdown();
     this.game.reset(initialItems);
     this.myColor = myColor;
     this.boardFlipped = myColor === COLORS.BLACK;
@@ -323,10 +421,6 @@ class FogChessApp {
     this.connectionText.textContent = text;
   }
 
-  /**
-   * When a peer connects/reconnects, DO NOT wipe an existing match!
-   * Instead, synchronize the current board & powerup state (`SYNC_MATCH_STATE`).
-   */
   handlePeerConnected({ isResponder } = {}) {
     if (isResponder) {
       this.showToast('Opponent connected — syncing live match state!', 'success');
@@ -336,8 +430,6 @@ class FogChessApp {
         state: this.game.serializeState(),
       });
     } else {
-      // Joining / rejoining client announces readiness and shares its history count in case
-      // the other player is the one who lost state.
       this.network.send({
         type: 'PEER_JOINED_READY',
         historyLength: this.game.history.length,
@@ -356,8 +448,6 @@ class FogChessApp {
 
     switch (data.type) {
       case 'PEER_JOINED_READY': {
-        // If the joining player actually has a further-progressed match state than ours
-        // (e.g. if our tab refreshed and lost state), adopt their state!
         if (
           data.state &&
           (data.historyLength || 0) > this.game.history.length
@@ -369,7 +459,6 @@ class FogChessApp {
           this.renderAll();
           this.showToast('Restored in-progress match state from opponent!', 'success');
         } else {
-          // Send our authoritative match state (whether at turn 1 or turn 30) to the joining player
           this.network.send({
             type: 'SYNC_MATCH_STATE',
             yourColor: oppositeColor(this.myColor),
@@ -384,7 +473,6 @@ class FogChessApp {
         const incomingLen = data.state.history?.length || 0;
         const myLen = this.game.history.length;
 
-        // If we somehow have more moves than the incoming sync, push our state back instead of overwriting!
         if (myLen > incomingLen) {
           this.network.send({
             type: 'SYNC_MATCH_STATE',
@@ -416,6 +504,7 @@ class FogChessApp {
       }
 
       case 'NEW_REMATCH': {
+        this.clearPanicCountdown();
         if (data.state) {
           this.game.loadState(data.state);
         } else {
@@ -439,9 +528,24 @@ class FogChessApp {
 
       case 'USE_POWERUP': {
         const oppColor = oppositeColor(this.myColor);
-        const res = this.game.usePowerup(oppColor, data.slotIndex, data.params || {});
-        if (res.ok) {
-          this.showToast(`Opponent used ${POWERUP_DEFS[data.powerupId]?.name || 'a powerup'}! ${res.summary}`, 'info');
+        if (data.powerupId === 'transform' && data.params?.square) {
+          const [tr, tc] = data.params.square;
+          const oldPiece = this.game.board[tr]?.[tc];
+          const oldType = oldPiece ? oldPiece.type : PIECES.PAWN;
+          const res = this.game.usePowerup(oppColor, data.slotIndex, data.params || {});
+          if (res.ok) {
+            this.runWheelOfFortuneAnimation(tr, tc, oppColor, oldType, res.newPieceType, () => {
+              this.showToast(`Opponent used ${res.summary}`, 'info');
+              this.saveRoomSnapshot();
+              this.renderAll();
+            });
+            return;
+          }
+        } else {
+          const res = this.game.usePowerup(oppColor, data.slotIndex, data.params || {});
+          if (res.ok) {
+            this.showToast(`Opponent used ${POWERUP_DEFS[data.powerupId]?.name || 'a powerup'}! ${res.summary}`, 'info');
+          }
         }
         this.selectedSquare = null;
         this.legalMovesForSelected = [];
@@ -455,7 +559,9 @@ class FogChessApp {
           awardedPowerup: data.awardedPowerup,
           spawnedItem: data.spawnedItem ?? null,
         });
-        if (moveRec?.pickedUpBox && moveRec.grantedPowerup) {
+        if (moveRec?.armorBroken) {
+          this.showToast('🛡️ Attack shattered Pawn Armor! The attacking piece bounced back!', 'info');
+        } else if (moveRec?.pickedUpBox && moveRec.grantedPowerup) {
           this.showToast('Opponent collected a Mystery [?] Powerup Box!', 'info');
         }
         this.selectedSquare = null;
@@ -465,7 +571,17 @@ class FogChessApp {
         break;
       }
 
+      case 'PANIC_TIMEOUT': {
+        this.clearPanicCountdown();
+        this.game.skipTurnByPanicTimeout();
+        this.saveRoomSnapshot();
+        this.renderAll();
+        this.showToast('🚨 Opponent ran out of Panic time! Their turn was skipped!', 'success');
+        break;
+      }
+
       case 'RESIGN': {
+        this.clearPanicCountdown();
         this.game.resign(data.color);
         this.saveRoomSnapshot();
         this.renderAll();
@@ -475,18 +591,147 @@ class FogChessApp {
     }
   }
 
+  /**
+   * Manages the 10-second Panic countdown timer when `this.game.panicActive[this.game.turn]` is true.
+   */
+  syncPanicCountdown() {
+    if (this.game.winner) {
+      this.clearPanicCountdown();
+      return;
+    }
+
+    const activeTurnColor = this.game.turn;
+    const isPanicNow = Boolean(this.game.panicActive[activeTurnColor]);
+    if (!isPanicNow) {
+      this.clearPanicCountdown();
+      return;
+    }
+
+    const key = `${this.game.history.length}_${activeTurnColor}`;
+    if (this.panicTurnKey === key && this.panicTimerInterval) {
+      return; // Already counting down for this turn
+    }
+
+    this.clearPanicCountdown();
+    this.panicTurnKey = key;
+    this.panicDeadline = Date.now() + 10000; // 10.0 seconds
+    let lastBeepSecond = 6;
+
+    if (this.panicBannerEl) {
+      this.panicBannerEl.classList.remove('hidden');
+    }
+
+    const tick = () => {
+      if (this.game.winner || !this.game.panicActive[this.game.turn]) {
+        this.clearPanicCountdown();
+        return;
+      }
+      const remainingMs = Math.max(0, this.panicDeadline - Date.now());
+      const secs = (remainingMs / 1000).toFixed(1);
+      const who = this.game.turn === this.myColor ? 'YOU HAVE' : 'OPPONENT HAS';
+
+      if (this.panicTimerTextEl) {
+        this.panicTimerTextEl.textContent = `🚨 PANIC! ${who} ${secs}s TO MAKE A MOVE!`;
+      }
+
+      const wholeSec = Math.ceil(remainingMs / 1000);
+      if (wholeSec <= 5 && wholeSec > 0 && wholeSec < lastBeepSecond) {
+        lastBeepSecond = wholeSec;
+        this.playPanicBeepSound();
+      }
+
+      if (remainingMs <= 0) {
+        this.clearPanicCountdown();
+        if (this.game.turn === this.myColor) {
+          this.handleMyPanicTimeout();
+        }
+      }
+    };
+
+    tick();
+    this.panicTimerInterval = setInterval(tick, 100);
+  }
+
+  clearPanicCountdown() {
+    if (this.panicTimerInterval) {
+      clearInterval(this.panicTimerInterval);
+      this.panicTimerInterval = null;
+    }
+    this.panicTurnKey = null;
+    if (this.panicBannerEl) {
+      this.panicBannerEl.classList.add('hidden');
+    }
+  }
+
+  handleMyPanicTimeout() {
+    if (this.game.winner || this.game.turn !== this.myColor) return;
+    this.selectedSquare = null;
+    this.legalMovesForSelected = [];
+    this.targetingState = null;
+
+    this.game.skipTurnByPanicTimeout();
+    this.saveRoomSnapshot();
+
+    if (this.mode === 'online' && this.network.connected) {
+      this.network.send({ type: 'PANIC_TIMEOUT' });
+    }
+
+    this.showToast('🚨 10s Panic timer expired! Your turn was forfeited!', 'error');
+    this.renderAll();
+
+    if (this.mode === 'bot' && !this.game.winner && this.game.turn !== this.myColor) {
+      this.scheduleBotMove();
+    }
+  }
+
+  /**
+   * Animates a Wheel-of-Fortune piece transformation on square (r, c) with decelerating ticks.
+   */
+  runWheelOfFortuneAnimation(r, c, color, oldType, finalType, onComplete) {
+    this.wheelAnimating = true;
+    const cyclePool = [PIECES.PAWN, PIECES.KNIGHT, PIECES.BISHOP, PIECES.ROOK, PIECES.QUEEN];
+    const totalSteps = 16;
+    let step = 0;
+
+    const sqEl = this.boardEl.querySelector(`.square[data-row="${r}"][data-col="${c}"]`);
+
+    const stepTick = () => {
+      step++;
+      const isLast = step >= totalSteps;
+      const displayType = isLast ? finalType : cyclePool[(step + cyclePool.indexOf(oldType)) % cyclePool.length];
+
+      if (sqEl) {
+        sqEl.classList.add('sq-wheel-spinning');
+        const pieceContainer = sqEl.querySelector('.piece-container');
+        if (pieceContainer) {
+          pieceContainer.innerHTML = getPieceSVG(displayType, color);
+        }
+      }
+
+      if (!isLast) {
+        this.playWheelTickSound(step, totalSteps);
+        const delay = Math.round(50 + Math.pow(step / totalSteps, 2.2) * 230);
+        setTimeout(stepTick, delay);
+      } else {
+        this.playWheelFanfareSound();
+        setTimeout(() => {
+          this.wheelAnimating = false;
+          if (onComplete) onComplete();
+        }, 320);
+      }
+    };
+
+    stepTick();
+  }
+
   isMyTurn() {
-    if (this.game.winner) return false;
+    if (this.game.winner || this.wheelAnimating) return false;
     if (this.mode === 'online' && !this.network.connected) {
       return false;
     }
     return this.game.turn === this.myColor;
   }
 
-  /**
-   * Called when player clicks "Use" on a powerup slot in their inventory.
-   * Players can use up to 2 powerups on a single turn!
-   */
   initiatePowerupSlot(slotIndex) {
     if (!this.isMyTurn()) {
       this.showToast('Wait for your turn to activate a powerup!', 'info');
@@ -504,9 +749,47 @@ class FogChessApp {
     this.selectedSquare = null;
     this.legalMovesForSelected = [];
 
+    if (powerupId === 'resurrect') {
+      const lost = this.game.captured[this.myColor] || [];
+      if (lost.length === 0) {
+        this.showToast('⚱️ You have no lost pieces to resurrect yet!', 'info');
+        return;
+      }
+      const homeRow = this.myColor === COLORS.WHITE ? 7 : 0;
+      let hasEmptyHomeSq = false;
+      for (let c = 0; c < 8; c++) {
+        if (!this.game.board[homeRow][c] && !this.game.isWall(homeRow, c)) {
+          hasEmptyHomeSq = true;
+          break;
+        }
+      }
+      if (!hasEmptyHomeSq) {
+        this.showToast('⚱️ Your lowest (home) row has no empty squares right now!', 'info');
+        return;
+      }
+
+      const uniqueLostTypes = Array.from(new Set(lost));
+      if (uniqueLostTypes.length === 1) {
+        this.targetingState = {
+          slotIndex,
+          powerupId,
+          step: 1,
+          resurrectPieceType: uniqueLostTypes[0],
+        };
+        this.renderAll();
+      } else {
+        this.openResurrectPickerModal(slotIndex, uniqueLostTypes);
+      }
+      return;
+    }
+
     if (def.targetType === 'none') {
-      const duration = Math.floor(Math.random() * 3) + 1;
-      this.commitPowerupUse(slotIndex, powerupId, { duration });
+      if (powerupId === 'fog') {
+        const duration = Math.floor(Math.random() * 3) + 1;
+        this.commitPowerupUse(slotIndex, powerupId, { duration });
+      } else {
+        this.commitPowerupUse(slotIndex, powerupId, {});
+      }
       return;
     }
 
@@ -519,7 +802,65 @@ class FogChessApp {
     this.renderAll();
   }
 
+  openResurrectPickerModal(slotIndex, uniqueLostTypes) {
+    if (this.promotionTitleEl) this.promotionTitleEl.textContent = '⚱️ Resurrect Lost Piece';
+    if (this.promotionDescEl) this.promotionDescEl.textContent = 'Choose which captured piece to revive onto your home row:';
+    this.promotionChoices.innerHTML = '';
+
+    for (const type of uniqueLostTypes) {
+      const btn = document.createElement('button');
+      btn.className = 'promo-choice-btn';
+      btn.innerHTML = `${getPieceSVG(type, this.myColor)}<span>${PIECE_NAMES[type]}</span>`;
+      btn.addEventListener('click', () => {
+        this.promotionModal.classList.add('hidden');
+        this.targetingState = {
+          slotIndex,
+          powerupId: 'resurrect',
+          step: 1,
+          resurrectPieceType: type,
+        };
+        this.renderAll();
+      });
+      this.promotionChoices.appendChild(btn);
+    }
+
+    this.promotionModal.classList.remove('hidden');
+  }
+
   commitPowerupUse(slotIndex, powerupId, params) {
+    if (powerupId === 'transform' && params.square) {
+      const [r, c] = params.square;
+      const oldPiece = this.game.board[r]?.[c];
+      if (!oldPiece) return false;
+      const oldType = oldPiece.type;
+      const newPieceType = rollTransformedPieceType(oldType);
+      params = { ...params, newPieceType };
+
+      const res = this.game.usePowerup(this.myColor, slotIndex, params);
+      if (!res.ok) {
+        this.showToast(res.reason || 'Invalid target for Wheel of Fortune.', 'error');
+        return false;
+      }
+
+      this.targetingState = null;
+      this.saveRoomSnapshot();
+
+      if (this.mode === 'online' && this.network.connected) {
+        this.network.send({
+          type: 'USE_POWERUP',
+          slotIndex,
+          powerupId,
+          params,
+        });
+      }
+
+      this.runWheelOfFortuneAnimation(r, c, this.myColor, oldType, res.newPieceType, () => {
+        this.showToast(res.summary, 'success');
+        this.renderAll();
+      });
+      return true;
+    }
+
     const res = this.game.usePowerup(this.myColor, slotIndex, params);
     if (!res.ok) {
       this.showToast(res.reason || 'Invalid target for powerup.', 'error');
@@ -545,6 +886,7 @@ class FogChessApp {
 
   isValidPowerupTarget(r, c, visibleSquares) {
     if (!this.targetingState) return false;
+    if (!inBounds(r, c)) return false;
     const def = POWERUP_DEFS[this.targetingState.powerupId];
     if (!def) return false;
 
@@ -560,11 +902,29 @@ class FogChessApp {
           !this.game.itemBoxes.has(key)
         );
 
+      case 'home_row_empty': {
+        const homeRow = this.myColor === COLORS.WHITE ? 7 : 0;
+        return r === homeRow && !piece && !this.game.isWall(r, c);
+      }
+
+      case 'friendly_pawn':
+        return (
+          Boolean(piece) &&
+          piece.color === this.myColor &&
+          piece.type === PIECES.PAWN &&
+          !this.game.isArmored(r, c)
+        );
+
       case 'friendly_non_king':
         if (!piece || piece.color !== this.myColor || piece.type === PIECES.KING) {
           return false;
         }
-        if (this.targetingState.powerupId === 'feather' && this.game.isFrozen(r, c)) {
+        if (
+          (this.targetingState.powerupId === 'feather' ||
+            this.targetingState.powerupId === 'ghost' ||
+            this.targetingState.powerupId === 'refuge') &&
+          this.game.isFrozen(r, c)
+        ) {
           return false;
         }
         return true;
@@ -602,7 +962,7 @@ class FogChessApp {
   }
 
   handleSquareClick(r, c) {
-    if (this.game.winner) return;
+    if (this.game.winner || this.wheelAnimating) return;
 
     if (this.mode === 'online' && !this.network.connected) {
       this.showToast('Waiting for opponent to join the room first (or click Practice vs. Bot).', 'info');
@@ -619,7 +979,7 @@ class FogChessApp {
         return;
       }
 
-      const { slotIndex, powerupId, step, firstSquare } = this.targetingState;
+      const { slotIndex, powerupId, step, firstSquare, resurrectPieceType } = this.targetingState;
       const def = POWERUP_DEFS[powerupId];
 
       if (def.targetType === 'two_friendly_non_king') {
@@ -637,11 +997,19 @@ class FogChessApp {
         }
       }
 
+      if (powerupId === 'resurrect') {
+        this.commitPowerupUse(slotIndex, powerupId, {
+          square: [r, c],
+          pieceType: resurrectPieceType,
+        });
+        return;
+      }
+
       this.commitPowerupUse(slotIndex, powerupId, { square: [r, c] });
       return;
     }
 
-    // 2. Normal Chess Move handling:
+    // 2. Normal Chess Move handling (supports 8x8 board + Outer Refuge Ring):
     const matchingMove = this.legalMovesForSelected.find(
       (m) => m.to[0] === r && m.to[1] === c
     );
@@ -655,9 +1023,9 @@ class FogChessApp {
       return;
     }
 
-    const clickedPiece = this.game.board[r][c];
+    const clickedPiece = this.game.getPieceAt(r, c);
     if (clickedPiece && clickedPiece.color === this.myColor) {
-      if (this.game.isFrozen(r, c)) {
+      if (inBounds(r, c) && this.game.isFrozen(r, c)) {
         this.showToast('❄️ That piece is frozen in ice for this turn!', 'info');
         return;
       }
@@ -683,6 +1051,8 @@ class FogChessApp {
 
   openPromotionModal(from, to) {
     this.pendingPromotionMove = { from, to };
+    if (this.promotionTitleEl) this.promotionTitleEl.textContent = 'Promote Pawn';
+    if (this.promotionDescEl) this.promotionDescEl.textContent = 'Choose a piece to promote your pawn to:';
     this.promotionChoices.innerHTML = '';
     const promoTypes = [PIECES.QUEEN, PIECES.ROOK, PIECES.BISHOP, PIECES.KNIGHT];
 
@@ -710,7 +1080,9 @@ class FogChessApp {
     this.targetingState = null;
     this.saveRoomSnapshot();
 
-    if (moveRecord.pickedUpBox) {
+    if (moveRecord.armorBroken) {
+      this.showToast('🛡️ Attack destroyed Pawn Armor! Attacking piece stayed on its starting square.', 'info');
+    } else if (moveRecord.pickedUpBox) {
       if (moveRecord.grantedPowerup) {
         const def = POWERUP_DEFS[moveRecord.grantedPowerup];
         this.showToast(`🎁 Unlocked Powerup: ${def.icon} ${def.name}!`, 'success');
@@ -754,12 +1126,12 @@ class FogChessApp {
       for (const m of allMoves) {
         let score = 0;
         const toKey = `${m.to[0]},${m.to[1]}`;
-        const target = this.game.board[m.to[0]][m.to[1]];
+        const target = this.game.getPieceAt(m.to[0], m.to[1]);
 
         if (target) {
           score += (pieceValues[target.type] || 1) * 14;
         }
-        if (this.game.itemBoxes.has(toKey) && this.game.inventories[botColor].length < 2) {
+        if (inBounds(m.to[0], m.to[1]) && this.game.itemBoxes.has(toKey) && this.game.inventories[botColor].length < 2) {
           score += 18;
         }
         if (m.promotion) score += 10;
@@ -799,6 +1171,44 @@ class FogChessApp {
         break;
       }
 
+      case 'panic': {
+        const res = this.game.usePowerup(botColor, 0, {});
+        if (res.ok) this.showToast(`Bot used ${res.summary}`, 'info');
+        break;
+      }
+
+      case 'armor': {
+        for (let r = 0; r < 8; r++) {
+          for (let c = 0; c < 8; c++) {
+            const p = this.game.board[r][c];
+            if (p && p.color === botColor && p.type === PIECES.PAWN && !this.game.isArmored(r, c)) {
+              const res = this.game.usePowerup(botColor, 0, { square: [r, c] });
+              if (res.ok) this.showToast(`Bot used ${res.summary}`, 'info');
+              return;
+            }
+          }
+        }
+        break;
+      }
+
+      case 'resurrect': {
+        const lost = this.game.captured[botColor];
+        const homeRow = botColor === COLORS.WHITE ? 7 : 0;
+        if (lost && lost.length > 0) {
+          for (let c = 0; c < 8; c++) {
+            if (!this.game.board[homeRow][c] && !this.game.isWall(homeRow, c)) {
+              const res = this.game.usePowerup(botColor, 0, {
+                square: [homeRow, c],
+                pieceType: lost[lost.length - 1],
+              });
+              if (res.ok) this.showToast(`Bot used ${res.summary}`, 'info');
+              return;
+            }
+          }
+        }
+        break;
+      }
+
       case 'freeze': {
         const candidates = [];
         for (let r = 0; r < 8; r++) {
@@ -820,7 +1230,9 @@ class FogChessApp {
       }
 
       case 'shield':
-      case 'feather': {
+      case 'feather':
+      case 'ghost':
+      case 'refuge': {
         const candidates = [];
         for (let r = 0; r < 8; r++) {
           for (let c = 0; c < 8; c++) {
@@ -836,6 +1248,21 @@ class FogChessApp {
           const [r, c] = candidates[0];
           const res = this.game.usePowerup(botColor, 0, { square: [r, c] });
           if (res.ok) this.showToast(`Bot used ${res.summary}`, 'info');
+        }
+        break;
+      }
+
+      case 'transform': {
+        // Bot uses Wheel of Fortune on a Pawn to try upgrading it!
+        for (let r = 0; r < 8; r++) {
+          for (let c = 0; c < 8; c++) {
+            const p = this.game.board[r][c];
+            if (p && p.color === botColor && p.type === PIECES.PAWN) {
+              const res = this.game.usePowerup(botColor, 0, { square: [r, c] });
+              if (res.ok) this.showToast(`Bot used ${res.summary}`, 'info');
+              return;
+            }
+          }
         }
         break;
       }
@@ -857,25 +1284,6 @@ class FogChessApp {
         }
         break;
       }
-
-      case 'swap': {
-        const ownPieces = [];
-        for (let r = 1; r <= 6; r++) {
-          for (let c = 0; c < 8; c++) {
-            const p = this.game.board[r][c];
-            if (p && p.color === botColor && p.type !== PIECES.KING) {
-              ownPieces.push([r, c]);
-            }
-          }
-        }
-        if (ownPieces.length >= 2) {
-          const a = ownPieces[0];
-          const b = ownPieces[ownPieces.length - 1];
-          const res = this.game.usePowerup(botColor, 0, { squareA: a, squareB: b });
-          if (res.ok) this.showToast(`Bot used ${res.summary}`, 'info');
-        }
-        break;
-      }
     }
   }
 
@@ -885,6 +1293,7 @@ class FogChessApp {
     this.renderHUD();
     this.renderMoveHistory();
     this.renderCaptured();
+    this.syncPanicCountdown();
   }
 
   renderInventory() {
@@ -955,6 +1364,11 @@ class FogChessApp {
       let prompt = `${def.icon} ${def.name}: `;
       if (def.targetType === 'empty_square') {
         prompt += 'Click any highlighted empty square to drop a Stone Wall.';
+      } else if (def.targetType === 'home_row_empty') {
+        const pName = PIECE_NAMES[this.targetingState.resurrectPieceType] || 'piece';
+        prompt += `Click any highlighted empty square on your lowest row to revive your ${pName}.`;
+      } else if (def.targetType === 'friendly_pawn') {
+        prompt += 'Click one of your highlighted Pawns to equip persistent Armor.';
       } else if (def.targetType === 'friendly_non_king') {
         prompt += 'Click one of your highlighted non-King pieces.';
       } else if (def.targetType === 'enemy_non_king') {
@@ -972,6 +1386,11 @@ class FogChessApp {
     }
   }
 
+  /**
+   * Renders the 10x10 Grid:
+   * - Inner 8x8 (rows 0..7, cols 0..7) is the chessboard.
+   * - Outer 1-cell border ring (row -1 or 8, col -1 or 8) is the interactive Refuge Ring!
+   */
   renderBoard() {
     const revealAll = Boolean(this.game.winner) || this.fogPeekDebug;
     const visibleSquares = this.game.getVisibleSquares(this.myColor);
@@ -987,23 +1406,25 @@ class FogChessApp {
 
     if (amIFogged) {
       const t = this.game.fogTurns[this.myColor];
-      this.visibleCountBadge.textContent = `🌫️ Blinded by Fog (${t} turn${t > 1 ? 's' : ''} left) • ${visibleSquares.size}/64 visible`;
+      this.visibleCountBadge.textContent = `🌫️ Blinded by Fog (${t} turn${t > 1 ? 's' : ''} left)`;
       this.visibleCountBadge.className = 'sight-badge badge-fog-active';
     } else if (isOppFogged) {
       const t = this.game.fogTurns[oppColor];
-      this.visibleCountBadge.textContent = `🌫️ Opponent Blinded (${t} turn${t > 1 ? 's' : ''} left) • Faded pieces are hidden from foe`;
+      this.visibleCountBadge.textContent = `🌫️ Opponent Blinded (${t} turn${t > 1 ? 's' : ''} left) • Faded pieces hidden`;
       this.visibleCountBadge.className = 'sight-badge badge-opp-fogged';
     } else {
-      this.visibleCountBadge.textContent = `Full Board Vision • ${this.game.itemBoxes.size}/3 ? Boxes on board`;
+      this.visibleCountBadge.textContent = `Full Vision • ${this.game.itemBoxes.size}/3 ? Boxes`;
       this.visibleCountBadge.className = 'sight-badge';
     }
 
-    const rows = this.boardFlipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
-    const cols = this.boardFlipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
+    // 10x10 grid including Outer Refuge Ring (-1..8)
+    const rows = this.boardFlipped
+      ? [8, 7, 6, 5, 4, 3, 2, 1, 0, -1]
+      : [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8];
+    const cols = this.boardFlipped
+      ? [8, 7, 6, 5, 4, 3, 2, 1, 0, -1]
+      : [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8];
     const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-
-    this.rankLabelsEl.innerHTML = rows.map((r) => `<span>${8 - r}</span>`).join('');
-    this.fileLabelsEl.innerHTML = cols.map((c) => `<span>${files[c]}</span>`).join('');
 
     this.boardEl.innerHTML = '';
     const lastMove = this.game.history[this.game.history.length - 1] || null;
@@ -1011,6 +1432,7 @@ class FogChessApp {
     for (const r of rows) {
       for (const c of cols) {
         const sqKey = `${r},${c}`;
+        const isRefugeCell = inRefugeRing(r, c);
         const isLight = (r + c) % 2 === 0;
         const isVisible = visibleSquares.has(sqKey);
         const isHiddenFromOpp = Boolean(
@@ -1018,19 +1440,38 @@ class FogChessApp {
         );
 
         const sqEl = document.createElement('div');
-        sqEl.className = `square ${isLight ? 'sq-light' : 'sq-dark'}`;
         sqEl.dataset.row = r;
         sqEl.dataset.col = c;
         sqEl.dataset.coord = coordsToAlgebraic(r, c);
 
-        if (!isVisible && !revealAll) {
-          sqEl.classList.add('sq-fog');
-        } else if (!isVisible && revealAll) {
-          sqEl.classList.add('sq-fog-peek');
+        if (isRefugeCell) {
+          sqEl.className = 'square sq-refuge-ring';
+          // Show subtle coordinate labels on the left/bottom refuge border cells when empty
+          const pieceInRefuge = this.game.refugePieces.get(sqKey);
+          if (!pieceInRefuge) {
+            const labelCoordEl = document.createElement('span');
+            labelCoordEl.className = 'refuge-coord-label';
+            if ((this.boardFlipped && c === 8 && inBounds(r, 0)) || (!this.boardFlipped && c === -1 && inBounds(r, 0))) {
+              labelCoordEl.textContent = `${8 - r}`;
+            } else if ((this.boardFlipped && r === -1 && inBounds(0, c)) || (!this.boardFlipped && r === 8 && inBounds(0, c))) {
+              labelCoordEl.textContent = files[c];
+            } else {
+              labelCoordEl.textContent = '🌀';
+              labelCoordEl.classList.add('refuge-spiral-dot');
+            }
+            sqEl.appendChild(labelCoordEl);
+          }
         } else {
-          sqEl.classList.add('sq-visible');
-          if (isHiddenFromOpp) {
-            sqEl.classList.add('sq-opp-fogged');
+          sqEl.className = `square ${isLight ? 'sq-light' : 'sq-dark'}`;
+          if (!isVisible && !revealAll) {
+            sqEl.classList.add('sq-fog');
+          } else if (!isVisible && revealAll) {
+            sqEl.classList.add('sq-fog-peek');
+          } else {
+            sqEl.classList.add('sq-visible');
+            if (isHiddenFromOpp) {
+              sqEl.classList.add('sq-opp-fogged');
+            }
           }
         }
 
@@ -1050,7 +1491,7 @@ class FogChessApp {
           sqEl.classList.add('sq-selected');
         }
 
-        if (lastMove && (isVisible || revealAll)) {
+        if (lastMove && !lastMove.panicTimeoutSkip && (isVisible || revealAll)) {
           if (
             (lastMove.from[0] === r && lastMove.from[1] === c) ||
             (lastMove.to[0] === r && lastMove.to[1] === c)
@@ -1059,8 +1500,8 @@ class FogChessApp {
           }
         }
 
-        // 1. Render Rainbow '?' Item Box if present and square is visible
-        if (this.game.itemBoxes.has(sqKey) && (isVisible || revealAll)) {
+        // 1. Render Rainbow '?' Item Box
+        if (!isRefugeCell && this.game.itemBoxes.has(sqKey) && (isVisible || revealAll)) {
           const itemBoxEl = document.createElement('div');
           itemBoxEl.className = `item-box-cube ${isHiddenFromOpp ? 'item-hidden-in-fog' : ''}`;
           itemBoxEl.title = isHiddenFromOpp
@@ -1070,8 +1511,8 @@ class FogChessApp {
           sqEl.appendChild(itemBoxEl);
         }
 
-        // 2. Render Stone Wall if present and square is visible
-        if (this.game.isWall(r, c) && (isVisible || revealAll)) {
+        // 2. Render Stone Wall
+        if (!isRefugeCell && this.game.isWall(r, c) && (isVisible || revealAll)) {
           const wallLeft = Math.ceil((this.game.walls.get(sqKey) || 1) / 2);
           const wallEl = document.createElement('div');
           wallEl.className = 'wall-obstacle';
@@ -1080,9 +1521,12 @@ class FogChessApp {
           sqEl.appendChild(wallEl);
         }
 
-        // 3. Render Piece if present and visible
-        const piece = this.game.board[r][c];
+        // 3. Render Piece (either on 8x8 board or in Outer Refuge Ring)
+        const piece = this.game.getPieceAt(r, c);
         if (piece && (isVisible || revealAll || piece.color === this.myColor)) {
+          if (isRefugeCell) {
+            sqEl.classList.add('sq-refuge-occupied');
+          }
           const pieceWrapper = document.createElement('div');
           pieceWrapper.className = 'piece-container';
 
@@ -1092,8 +1536,8 @@ class FogChessApp {
             sqEl.title = 'Hidden in your Fog Cloud — Opponent cannot see this piece!';
           }
 
-          // Highlight King in Check!
           const isThisKingInCheck =
+            !isRefugeCell &&
             piece.type === PIECES.KING &&
             ((piece.color === COLORS.WHITE && whiteInCheck) ||
               (piece.color === COLORS.BLACK && blackInCheck));
@@ -1102,16 +1546,23 @@ class FogChessApp {
             sqEl.classList.add('sq-in-check');
           }
 
-          if (this.game.isShielded(r, c)) {
+          if (!isRefugeCell && this.game.isShielded(r, c)) {
             pieceWrapper.classList.add('piece-shielded');
             sqEl.classList.add('sq-has-shield');
           }
-          if (this.game.isFrozen(r, c)) {
+          if (!isRefugeCell && this.game.isFrozen(r, c)) {
             pieceWrapper.classList.add('piece-frozen');
             sqEl.classList.add('sq-has-freeze');
           }
-          if (this.game.hasFeather(r, c)) {
+          if (!isRefugeCell && this.game.hasFeather(r, c)) {
             pieceWrapper.classList.add('piece-feathered');
+          }
+          if (!isRefugeCell && this.game.hasGhost(r, c)) {
+            pieceWrapper.classList.add('piece-ghost');
+          }
+          if (this.game.isArmored(r, c)) {
+            pieceWrapper.classList.add('piece-armored');
+            sqEl.classList.add('sq-has-armor');
           }
 
           pieceWrapper.innerHTML = getPieceSVG(piece.type, piece.color);
@@ -1119,10 +1570,14 @@ class FogChessApp {
 
           const badges = [];
           if (isThisKingInCheck) badges.push('⚠️');
-          if (this.game.isShielded(r, c)) badges.push('⭐');
-          if (this.game.isFrozen(r, c)) badges.push('❄️');
-          if (this.game.hasFeather(r, c)) badges.push('🪶');
+          if (this.game.isArmored(r, c)) badges.push('🛡️');
+          if (!isRefugeCell && this.game.isShielded(r, c)) badges.push('⭐');
+          if (!isRefugeCell && this.game.isFrozen(r, c)) badges.push('❄️');
+          if (!isRefugeCell && this.game.hasFeather(r, c)) badges.push('🪶');
+          if (!isRefugeCell && this.game.hasGhost(r, c)) badges.push('👻');
+          if (isRefugeCell || this.game.hasRefugeReady(r, c)) badges.push('🌀');
           if (isThisPieceStealthed) badges.push('🌫️');
+
           if (badges.length > 0) {
             const badgeEl = document.createElement('div');
             badgeEl.className = 'piece-status-badge';
@@ -1148,6 +1603,8 @@ class FogChessApp {
           const marker = document.createElement('div');
           marker.className = moveOption.capture
             ? 'legal-capture-ring'
+            : moveOption.toRefuge || moveOption.fromRefuge
+            ? 'legal-refuge-dot'
             : moveOption.featherJump
             ? 'legal-feather-dot'
             : 'legal-move-dot';
@@ -1216,11 +1673,17 @@ class FogChessApp {
       const heldCount = this.game.inventories[this.myColor].length;
       const canPowerup = heldCount > 0 && remainingPowerupUses > 0;
       const checkPrefix = amIInCheck ? '⚠️ CHECK! — ' : '';
-      const hint = canPowerup ? ` — You can use ${ heldCount === 2 && remainingPowerupUses === 2 ? 'up to 2 Powerups' : 'a Powerup' } before moving!` : '';
+      const hint = canPowerup
+        ? ` — You can use ${heldCount === 2 && remainingPowerupUses === 2 ? 'up to 2 Powerups' : 'a Powerup'} before moving!`
+        : '';
       this.turnBanner.textContent = `${checkPrefix}Your Turn (${myColorName})${hint}`;
       this.turnBanner.className = `turn-banner ${amIInCheck ? 'banner-in-check' : 'banner-my-turn'}`;
     } else {
-      const checkPrefix = amIInCheck ? '⚠️ Your King is in Check! — ' : isOppInCheck ? `⚔️ ${oppColorName} is in Check — ` : '';
+      const checkPrefix = amIInCheck
+        ? '⚠️ Your King is in Check! — '
+        : isOppInCheck
+        ? `⚔️ ${oppColorName} is in Check — `
+        : '';
       this.turnBanner.textContent = `${checkPrefix}Opponent's Turn (${oppColorName})`;
       this.turnBanner.className = 'turn-banner banner-opp-turn';
     }
@@ -1284,7 +1747,7 @@ class FogChessApp {
     clearTimeout(this.toastTimeout);
     this.toastTimeout = setTimeout(() => {
       this.toastEl.classList.add('hidden');
-    }, 4200);
+    }, 4400);
   }
 }
 

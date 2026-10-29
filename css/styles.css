@@ -516,7 +516,32 @@ body {
   border-color: #f43f5e;
 }
 
-/* Targeting Banner */
+/* Targeting & Panic Banners */
+@keyframes panicPulse {
+  0%, 100% {
+    background: rgba(244, 63, 94, 0.28);
+    border-color: #f43f5e;
+    box-shadow: 0 0 14px rgba(244, 63, 94, 0.45);
+  }
+  50% {
+    background: rgba(245, 158, 11, 0.34);
+    border-color: #fbbf24;
+    box-shadow: 0 0 22px rgba(251, 191, 36, 0.7);
+  }
+}
+
+.panic-banner {
+  padding: 9px 14px;
+  border-radius: 10px;
+  border: 2px solid #f43f5e;
+  color: #fff1f2;
+  font-weight: 800;
+  font-size: 0.9rem;
+  text-align: center;
+  letter-spacing: 0.04em;
+  animation: panicPulse 0.7s ease-in-out infinite;
+}
+
 .targeting-banner {
   display: flex;
   align-items: center;
@@ -531,40 +556,12 @@ body {
   font-weight: 600;
 }
 
-/* Chessboard Frame */
-.board-outer-frame {
-  display: grid;
-  grid-template-columns: 20px 1fr;
-  gap: 6px;
-  align-items: center;
-}
-
-.rank-labels {
-  display: grid;
-  grid-template-rows: repeat(8, 1fr);
-  height: 100%;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-align: center;
-  align-items: center;
-}
-
-.file-labels {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  padding-left: 26px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-align: center;
-}
-
+/* Chessboard Frame (10x10 with Outer Refuge Sanctuary Ring) */
 .board-inner-wrap {
   position: relative;
   width: 100%;
   aspect-ratio: 1 / 1;
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
   border: 3px solid #263449;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
@@ -574,8 +571,8 @@ body {
   width: 100%;
   height: 100%;
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  grid-template-rows: repeat(8, 1fr);
+  grid-template-columns: 0.65fr repeat(8, 1fr) 0.65fr;
+  grid-template-rows: 0.65fr repeat(8, 1fr) 0.65fr;
   user-select: none;
 }
 
@@ -586,6 +583,29 @@ body {
   justify-content: center;
   cursor: pointer;
   transition: background-color 0.18s ease;
+}
+
+/* Outer Refuge Border Ring Squares */
+.square.sq-refuge-ring {
+  background: rgba(15, 23, 42, 0.94);
+  border: 1px dashed rgba(99, 102, 241, 0.28);
+}
+
+.square.sq-refuge-ring.sq-refuge-occupied {
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.38), rgba(15, 23, 42, 0.95));
+  border: 1px solid #818cf8;
+}
+
+.refuge-coord-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: rgba(148, 163, 184, 0.65);
+  pointer-events: none;
+}
+
+.refuge-spiral-dot {
+  font-size: 0.62rem;
+  opacity: 0.35;
 }
 
 /* Visible Illuminated Squares */
@@ -674,6 +694,14 @@ body {
 
 .square.sq-has-shield {
   box-shadow: inset 0 0 0 3px #fbbf24, inset 0 0 14px rgba(251, 191, 36, 0.55);
+}
+
+.square.sq-has-armor {
+  box-shadow: inset 0 0 0 3px #93c5fd, inset 0 0 12px rgba(59, 130, 246, 0.55);
+}
+
+.square.sq-wheel-spinning {
+  box-shadow: inset 0 0 0 4px #f59e0b, inset 0 0 24px rgba(251, 191, 36, 0.9);
 }
 
 .square.sq-has-freeze {
@@ -783,6 +811,15 @@ body {
   filter: drop-shadow(0 0 7px rgba(16, 185, 129, 0.95));
 }
 
+.piece-container.piece-armored {
+  filter: drop-shadow(0 0 7px rgba(96, 165, 250, 0.95));
+}
+
+.piece-container.piece-ghost {
+  opacity: 0.78;
+  filter: drop-shadow(0 0 9px rgba(103, 232, 249, 0.95));
+}
+
 .piece-status-badge {
   position: absolute;
   top: 1px;
@@ -820,6 +857,16 @@ body {
   border-radius: 50%;
   background: rgba(16, 185, 129, 0.85);
   box-shadow: 0 0 0 2px #ffffff, 0 0 8px #10b981;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.legal-refuge-dot {
+  width: 38%;
+  height: 38%;
+  border-radius: 50%;
+  background: rgba(99, 102, 241, 0.9);
+  box-shadow: 0 0 0 2px #e0e7ff, 0 0 10px #818cf8;
   z-index: 3;
   pointer-events: none;
 }

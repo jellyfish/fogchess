@@ -4,10 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FogChess — Powerup Edition (Mario Kart Chess)</title>
-  <link rel="stylesheet" href="css/styles.css?v=6" />
+  <link rel="stylesheet" href="css/styles.css?v=7" />
   <!-- MQTT over Secure WebSockets (WSS) for instant, NAT-proof multiplayer rooms on GitHub Pages -->
   <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-  <script type="module" src="js/app.js?v=6"></script>
+  <script type="module" src="js/app.js?v=7"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -106,46 +106,58 @@
 
         <!-- Powerup Catalog Card -->
         <section class="card rules-card">
-          <h2 class="card-title">Mystery [?] Powerups</h2>
+          <h2 class="card-title">12 Mystery [?] Powerups</h2>
           <p class="card-desc">
-            Land on rainbow <strong>?</strong> squares to collect up to <strong>2 powerups</strong> (replenished every 2–5 turns). You can use <strong>both powerups on a single turn</strong> before moving!
+            Land on rainbow <strong>?</strong> squares to hold up to <strong>2 powerups</strong>. Use up to <strong>2 powerups on a single turn</strong> before moving!
           </p>
           <ul class="powerup-guide-list">
             <li>
               <span class="pg-icon">🌫️</span>
-              <div>
-                <strong>Fog Cloud:</strong> Blinds your opponent with Fog of War for 1–3 turns (you still see the full board).
-              </div>
+              <div><strong>Fog Cloud:</strong> Blind opponent with Fog of War for 1–3 turns (faded pieces show what's hidden).</div>
             </li>
             <li>
               <span class="pg-icon">🧱</span>
-              <div>
-                <strong>Stone Wall:</strong> Drop an impassable barrier on any empty square for 2 rounds. Knights can jump it.
-              </div>
+              <div><strong>Stone Wall:</strong> Impassable barrier on an empty square for 2 rounds.</div>
             </li>
             <li>
               <span class="pg-icon">⭐</span>
-              <div>
-                <strong>Star Shield:</strong> Make one of your non-King pieces invincible from capture for 1 round.
-              </div>
+              <div><strong>Star Shield:</strong> Make 1 friendly non-King piece invincible for 1 round.</div>
             </li>
             <li>
               <span class="pg-icon">❄️</span>
-              <div>
-                <strong>Ice Freeze:</strong> Freeze one enemy non-King piece so it cannot move on their next turn.
-              </div>
+              <div><strong>Ice Freeze:</strong> Freeze 1 enemy non-King piece for their next turn.</div>
             </li>
             <li>
               <span class="pg-icon">🪶</span>
-              <div>
-                <strong>Feather Jump:</strong> One friendly non-King piece can also jump like a Knight this turn.
-              </div>
+              <div><strong>Feather Jump:</strong> 1 friendly non-King piece can jump like a Knight this turn.</div>
             </li>
             <li>
               <span class="pg-icon">🔄</span>
-              <div>
-                <strong>Position Swap:</strong> Instantly swap the board squares of any two friendly non-King pieces.
-              </div>
+              <div><strong>Position Swap:</strong> Swap positions of any 2 friendly non-King pieces.</div>
+            </li>
+            <li>
+              <span class="pg-icon">⚱️</span>
+              <div><strong>Resurrect:</strong> Revive a lost piece onto an empty square on your lowest (home) row.</div>
+            </li>
+            <li>
+              <span class="pg-icon">🚨</span>
+              <div><strong>Panic!:</strong> Opponent only gets 10 seconds to make their next move!</div>
+            </li>
+            <li>
+              <span class="pg-icon">🌀</span>
+              <div><strong>Refuge:</strong> Piece can step onto the outer Refuge border ring around the board.</div>
+            </li>
+            <li>
+              <span class="pg-icon">🛡️</span>
+              <div><strong>Pawn Armor:</strong> Persistent 2nd life for a Pawn (attack breaks armor; attacker stays put).</div>
+            </li>
+            <li>
+              <span class="pg-icon">👻</span>
+              <div><strong>Ghost Phase:</strong> Piece phases through any pieces/walls when moving/capturing this turn.</div>
+            </li>
+            <li>
+              <span class="pg-icon">🎰</span>
+              <div><strong>Wheel of Fortune:</strong> Spin to transform a friendly non-King piece (10% P, 30% B, 30% N, 20% R, 10% Q).</div>
             </li>
           </ul>
         </section>
@@ -157,7 +169,7 @@
           <div class="hud-badges">
             <span id="my-role-badge" class="role-badge role-w">Playing as White</span>
             <span id="check-alert-badge" class="check-badge hidden">⚠️ IN CHECK</span>
-            <span id="visible-count-badge" class="sight-badge">Full Board Vision • 2/3 ? Boxes on board</span>
+            <span id="visible-count-badge" class="sight-badge">Full Vision • 2/3 ? Boxes</span>
           </div>
           <div class="board-actions">
             <button id="btn-peek-fog" class="btn btn-secondary btn-xs hidden" title="Toggle fog visibility in Practice Mode">
@@ -173,30 +185,31 @@
           Create or join a room (or click Practice vs. Bot) to begin
         </div>
 
+        <!-- 10-Second Panic Shot Clock Banner -->
+        <div id="panic-banner" class="panic-banner hidden">
+          <span id="panic-timer-text">🚨 PANIC! 10.0s TO MAKE A MOVE!</span>
+        </div>
+
         <!-- Interactive Targeting Bar when activating a targeted powerup -->
         <div id="targeting-banner" class="targeting-banner hidden">
           <span id="targeting-text">Select a target square on the board...</span>
           <button id="btn-cancel-targeting" class="btn btn-danger-outline btn-xs">Cancel</button>
         </div>
 
-        <div class="board-outer-frame">
-          <div id="rank-labels" class="rank-labels"></div>
-          <div class="board-inner-wrap">
-            <div id="chessboard" class="chessboard" role="grid" aria-label="Powerup Chessboard"></div>
+        <div class="board-inner-wrap">
+          <div id="chessboard" class="chessboard" role="grid" aria-label="Powerup Chessboard with Outer Refuge Ring"></div>
 
-            <!-- Game Over Overlay Banner -->
-            <div id="game-over-banner" class="game-over-overlay hidden">
-              <div class="game-over-card">
-                <h3 id="game-over-title">Victory!</h3>
-                <p id="game-over-subtitle">King captured.</p>
-                <button id="btn-banner-rematch" class="btn btn-primary">
-                  Play Rematch (Swap Colors)
-                </button>
-              </div>
+          <!-- Game Over Overlay Banner -->
+          <div id="game-over-banner" class="game-over-overlay hidden">
+            <div class="game-over-card">
+              <h3 id="game-over-title">Victory!</h3>
+              <p id="game-over-subtitle">Checkmate!</p>
+              <button id="btn-banner-rematch" class="btn btn-primary">
+                Play Rematch (Swap Colors)
+              </button>
             </div>
           </div>
         </div>
-        <div id="file-labels" class="file-labels"></div>
       </section>
 
       <!-- Right Column: Powerup Inventory, Captures & Move Log -->
@@ -230,7 +243,7 @@
         <section class="card move-log-card">
           <div class="card-header-inline">
             <h2 class="card-title">Match Move Log</h2>
-            <span class="intel-tag">Capture King</span>
+            <span class="intel-tag">Powerup Chess</span>
           </div>
           <div id="move-list" class="move-list"></div>
           <div class="match-controls">
@@ -246,11 +259,11 @@
     </main>
   </div>
 
-  <!-- Pawn Promotion Modal -->
+  <!-- Pawn Promotion / Resurrect Piece Picker Modal -->
   <div id="promotion-modal" class="modal-backdrop hidden">
     <div class="modal-card">
-      <h3>Promote Pawn</h3>
-      <p>Choose a piece to promote your pawn to:</p>
+      <h3 id="promotion-modal-title">Promote Pawn</h3>
+      <p id="promotion-modal-desc">Choose a piece to promote your pawn to:</p>
       <div id="promotion-choices" class="promotion-grid"></div>
     </div>
   </div>

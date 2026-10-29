@@ -16,16 +16,22 @@ A static, serverless multiplayer web game combining **Chess ("Capture the King")
 - **Capture the King:**
   - No check or checkmate restrictions. You win by capturing the opponent's King (or by opponent resignation).
 
-## The 6 Mystery Powerups
+## The 12 Mystery Powerups
 
 | Icon | Powerup | Effect |
 | :--- | :--- | :--- |
-| 🌫️ | **Fog Cloud** | Inflicts **Fog of War** on your opponent for **1–3 turns** (they can only see squares their pieces can see/reach, while you still see the full board). |
-| 🧱 | **Stone Wall** | Drop an impassable stone barrier on any empty square for **2 full rounds (4 turns)**. Blocks movement and sliding rays; Knights can jump over it. |
+| 🌫️ | **Fog Cloud** | Inflicts **Fog of War** on your opponent for **1–3 turns** (your own hidden pieces appear translucent on your screen so you know what is invisible to your opponent). |
+| 🧱 | **Stone Wall** | Drop an impassable stone barrier on any empty square for **2 full rounds (4 turns)**. Blocks movement and sliding rays; Knights & Ghosts can pass. |
 | ⭐ | **Star Shield** | Grants one of your non-King pieces **invincibility from capture** for 1 full round (through your opponent's next turn). |
-| ❄️ | **Ice Freeze** | Freezes one visible enemy non-King piece in ice so it **cannot move** on their upcoming turn. |
+| ❄️ | **Ice Freeze** | Freezes one visible enemy non-King piece in ice so it **cannot move or attack** on their upcoming turn. |
 | 🪶 | **Feather Jump** | Gives one of your non-King pieces the ability to **jump like a Knight** (in addition to its normal moves) for this turn. |
 | 🔄 | **Position Swap** | Instantly **swaps the board positions** of any two of your own non-King pieces before you make your normal move. |
+| ⚱️ | **Resurrect** | Revives one of your lost pieces onto any selected empty square on your lowest (home) row. |
+| 🚨 | **Panic!** | Gives your opponent only **10 seconds** to make their next move — if the shot clock expires, their turn is skipped! |
+| 🌀 | **Refuge** | Allows a friendly non-King piece to step **1 square off the edge of the board** into the outer Refuge ring (where it stays until moving back onto an adjacent edge square, or can be captured by an opponent also using Refuge). |
+| 🛡️ | **Pawn Armor** | Equips a friendly Pawn with a **persistent second life**. An attempted capture destroys the armor instead of the Pawn, and the attacking piece stays on its starting square! |
+| 👻 | **Ghost Phase** | For this turn, the chosen friendly non-King piece can **phase through any pieces or walls** when moving or capturing. |
+| 🎰 | **Wheel of Fortune** | Spins a decelerating roulette wheel (with mechanical ticking audio) to randomly transform a friendly non-King piece into a different piece (**10% Pawn, 30% Bishop, 30% Knight, 20% Rook, 10% Queen**). |
 
 ## Running Locally
 
