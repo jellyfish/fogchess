@@ -1,22 +1,20 @@
 /**
- * FogChess Real-Time WebSocket Room Networking
+ * FogChess Real-Time WebSocket Room Networking (v3)
  *
- * Why WebSockets (MQTT-over-WSS) instead of raw WebRTC P2P?
- * - WebRTC P2P requires direct UDP hole-punching between browsers. On Firefox, cellular networks,
- *   VPNs, or symmetric NATs, STUN-only WebRTC fails with:
- *   "WebRTC: ICE failed, your TURN server appears to be broken".
- * - By using Secure WebSockets (wss://) over standard TCP port 8084/8884/443 via public WSS brokers
- *   (plus BroadcastChannel for instant local tab testing), rooms connect in ~150ms through ANY
- *   firewall, NAT, or browser while remaining 100% static on GitHub Pages!
+ * Uses parallel Secure WebSockets (MQTT-over-WSS) across port 443 and 8084/8884 brokers
+ * with automatic message deduplication so laptop <-> phone connections work even when
+ * mobile carriers restrict non-443 ports.
  */
 
 const TOPIC_PREFIX = 'fogchess/v1/room/';
 
-// Redundant public MQTT-over-WSS brokers (automatic failover if one is unreachable)
+// Connect to multiple public WSS brokers in parallel (includes port 443 for strict mobile networks).
+// Since both clients connect to all reachable brokers and deduplicate by `msgId`,
+// any single common reachable broker bridges the laptop and phone!
 const WSS_BROKERS = [
+  'wss://mqtt.eclipseprojects.io:443/mqtt',
   'wss://broker.emqx.io:8084/mqtt',
   'wss://broker.hivemq.com:8884/mqtt',
-  'wss://test.mosquitto.org:8081/mqtt',
 ];
 
 export function generateRoomCode() {
@@ -36,11 +34,12 @@ export class RoomNetwork {
   constructor({ onStatusChange, onPeerConnected, onMessage, onPeerDisconnected, onError }) {
     this.clientId = randomId('player');
     this.opponentId = null;
-    this.mqttClient = null;
+    this.mqttClients = [];
     this.broadcastChannel = null;
     this.isHost = false;
     this.roomCode = null;
     this.connected = false;
+    this.brokerReady = false;
     this.joinRetryTimer = null;
     this.joinTimeoutTimer = null;
     this.seenMsgIds = new Set();
@@ -70,10 +69,12 @@ export class RoomNetwork {
     this.isHost = true;
     this.roomCode = roomCode.toUpperCase().trim();
 
-    this.onStatusChange('initializing', `Creating WebSocket room ${this.roomCode}...`);
+    this.onStatusChange('initializing', `Connecting to room ${this.roomCode}...`);
     this.setupLocalBroadcastChannel();
-    this.connectWebSocketBroker(0, () => {
-      this.onStatusChange('waiting', `Waiting for opponent in room ${this.roomCode}...`);
+    this.connectWebSocketPool(() => {
+      if (!this.connected) {
+        this.onStatusChange('waiting', `Waiting for opponent in room ${this.roomCode}...`);
+      }
     });
   }
 
@@ -88,16 +89,19 @@ export class RoomNetwork {
     this.onStatusChange('connecting', `Joining room ${this.roomCode}...`);
     this.setupLocalBroadcastChannel();
 
-    // Immediately broadcast a join request on local BroadcastChannel for instant 2-tab testing
+    // Also ping local BroadcastChannel for instant same-browser 2-tab testing
     this.publishLocal({ type: '__JOIN_REQUEST__' });
 
-    this.connectWebSocketBroker(0, () => {
+    this.connectWebSocketPool(() => {
       if (this.connected) return;
       this.startJoinHandshake();
     });
   }
 
   startJoinHandshake() {
+    clearInterval(this.joinRetryTimer);
+    clearTimeout(this.joinTimeoutTimer);
+
     let attempts = 0;
     const sendReq = () => {
       if (this.connected || !this.roomCode) return;
@@ -107,37 +111,32 @@ export class RoomNetwork {
 
     sendReq();
     this.joinRetryTimer = setInterval(() => {
-      if (this.connected || attempts >= 6) {
+      if (this.connected || attempts >= 8) {
         clearInterval(this.joinRetryTimer);
         return;
       }
       sendReq();
-    }, 1200);
+    }, 1000);
 
     this.joinTimeoutTimer = setTimeout(() => {
       if (!this.connected) {
         clearInterval(this.joinRetryTimer);
         this.onError(
-          `No host responded in room "${this.roomCode}". Verify the code and make sure the host tab is open.`
+          `Could not find host in room "${this.roomCode}". Check the code and ensure the host screen is open.`
         );
         this.onStatusChange('disconnected', `Room ${this.roomCode} not found`);
       }
-    }, 8500);
+    }, 9500);
   }
 
-  connectWebSocketBroker(brokerIndex, onReady) {
+  connectWebSocketPool(onFirstBrokerReady) {
     if (typeof window.mqtt === 'undefined') {
-      // Offline / local tab fallback
-      onReady();
+      this.onError('WebSocket library failed to load. Please refresh the page.');
       return;
     }
 
-    const brokerUrl = WSS_BROKERS[brokerIndex];
-    if (!brokerUrl) {
-      this.onStatusChange('waiting', `Room ${this.roomCode} active (Local Tab Mode)`);
-      onReady();
-      return;
-    }
+    let firstReadyFired = false;
+    let failedCount = 0;
 
     const willPayload = JSON.stringify({
       msgId: randomId('will'),
@@ -145,53 +144,56 @@ export class RoomNetwork {
       type: '__PEER_LEAVE__',
     });
 
-    try {
-      const client = window.mqtt.connect(brokerUrl, {
-        clientId: this.clientId,
-        clean: true,
-        connectTimeout: 4500,
-        reconnectPeriod: 3000,
-        will: {
-          topic: this.topic,
-          payload: willPayload,
-          qos: 0,
-          retain: false,
-        },
-      });
-
-      this.mqttClient = client;
-      let didOpen = false;
-
-      client.on('connect', () => {
-        didOpen = true;
-        client.subscribe(this.topic, { qos: 0 }, (err) => {
-          if (err) {
-            console.warn('WSS subscribe error, trying fallback broker:', err);
-            client.end(true);
-            this.connectWebSocketBroker(brokerIndex + 1, onReady);
-            return;
-          }
-          onReady();
+    for (const brokerUrl of WSS_BROKERS) {
+      try {
+        const client = window.mqtt.connect(brokerUrl, {
+          clientId: `${this.clientId}_${Math.random().toString(36).slice(2, 6)}`,
+          clean: true,
+          connectTimeout: 5000,
+          reconnectPeriod: 4000,
+          will: {
+            topic: this.topic,
+            payload: willPayload,
+            qos: 0,
+            retain: false,
+          },
         });
-      });
 
-      client.on('message', (topic, messageBuffer) => {
-        if (topic !== this.topic) return;
-        try {
-          const packet = JSON.parse(messageBuffer.toString());
-          this.handleIncomingPacket(packet);
-        } catch (_) {}
-      });
+        this.mqttClients.push(client);
 
-      client.on('error', (err) => {
-        console.warn(`WSS broker ${brokerUrl} error:`, err);
-        if (!didOpen) {
-          client.end(true);
-          this.connectWebSocketBroker(brokerIndex + 1, onReady);
-        }
-      });
-    } catch (err) {
-      this.connectWebSocketBroker(brokerIndex + 1, onReady);
+        client.on('connect', () => {
+          if (!this.roomCode) return;
+          client.subscribe(this.topic, { qos: 0 }, (err) => {
+            if (!err) {
+              this.brokerReady = true;
+              if (!firstReadyFired) {
+                firstReadyFired = true;
+                onFirstBrokerReady();
+              } else if (!this.isHost && !this.connected) {
+                // Newly connected secondary broker: immediately send a join request on it too!
+                this.publishRaw({ type: '__JOIN_REQUEST__' });
+              }
+            }
+          });
+        });
+
+        client.on('message', (topic, messageBuffer) => {
+          if (topic !== this.topic) return;
+          try {
+            const packet = JSON.parse(messageBuffer.toString());
+            this.handleIncomingPacket(packet);
+          } catch (_) {}
+        });
+
+        client.on('error', () => {
+          failedCount++;
+          if (failedCount >= WSS_BROKERS.length && !this.brokerReady) {
+            this.onError('Unable to reach WebSocket relay servers. Check your network connection.');
+          }
+        });
+      } catch (_) {
+        failedCount++;
+      }
     }
   }
 
@@ -208,7 +210,7 @@ export class RoomNetwork {
   handleIncomingPacket(packet) {
     if (!packet || !packet.senderId || packet.senderId === this.clientId) return;
 
-    // Deduplicate packets received across both BroadcastChannel and WebSocket
+    // Deduplicate packets received across multiple brokers / BroadcastChannel
     if (packet.msgId) {
       if (this.seenMsgIds.has(packet.msgId)) return;
       this.seenMsgIds.add(packet.msgId);
@@ -220,7 +222,6 @@ export class RoomNetwork {
     switch (packet.type) {
       case '__JOIN_REQUEST__': {
         if (!this.isHost) return;
-        // If we already have a different opponent connected, tell the newcomer the room is full
         if (this.connected && this.opponentId && this.opponentId !== packet.senderId) {
           this.publishRaw({
             type: '__ROOM_FULL__',
@@ -300,10 +301,15 @@ export class RoomNetwork {
 
   publishRaw(fields) {
     const packet = this.publishLocal(fields);
-    if (this.mqttClient && this.mqttClient.connected && this.roomCode) {
-      try {
-        this.mqttClient.publish(this.topic, JSON.stringify(packet), { qos: 0 });
-      } catch (_) {}
+    if (!this.roomCode) return;
+    const serialized = JSON.stringify(packet);
+
+    for (const client of this.mqttClients) {
+      if (client && client.connected) {
+        try {
+          client.publish(this.topic, serialized, { qos: 0 });
+        } catch (_) {}
+      }
     }
   }
 
@@ -321,16 +327,18 @@ export class RoomNetwork {
       this.publishRaw({ type: '__PEER_LEAVE__' });
     }
     this.connected = false;
+    this.brokerReady = false;
     this.opponentId = null;
     clearInterval(this.joinRetryTimer);
     clearTimeout(this.joinTimeoutTimer);
 
-    if (this.mqttClient) {
+    for (const client of this.mqttClients) {
       try {
-        this.mqttClient.end(true);
+        client.end(true);
       } catch (_) {}
-      this.mqttClient = null;
     }
+    this.mqttClients = [];
+
     if (this.broadcastChannel) {
       try {
         this.broadcastChannel.close();

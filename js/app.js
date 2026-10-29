@@ -4,9 +4,9 @@ import {
   PIECES,
   coordsToAlgebraic,
   oppositeColor,
-} from './chess.js';
-import { RoomNetwork, generateRoomCode } from './network.js';
-import { getPieceSVG, PIECE_NAMES } from './pieces.js';
+} from './chess.js?v=3';
+import { RoomNetwork, generateRoomCode } from './network.js?v=3';
+import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=3';
 
 class FogChessApp {
   constructor() {
