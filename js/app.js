@@ -9,9 +9,9 @@ import {
   inBounds,
   inRefugeRing,
   rollTransformedPieceType,
-} from './chess.js?v=8';
-import { RoomNetwork, generateRoomCode } from './network.js?v=8';
-import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=8';
+} from './chess.js?v=9';
+import { RoomNetwork, generateRoomCode } from './network.js?v=9';
+import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=9';
 
 class FogChessApp {
   constructor() {
@@ -732,19 +732,45 @@ class FogChessApp {
     return this.game.turn === this.myColor;
   }
 
+  canUsePowerupSlot(slotIndex) {
+    if (this.game.winner || this.wheelAnimating) return false;
+    if (this.mode === 'online' && !this.network.connected) {
+      return false;
+    }
+    const powerupId = this.game.inventories[this.myColor]?.[slotIndex];
+    const def = POWERUP_DEFS[powerupId];
+    if (!def) return false;
+
+    if (this.isMyTurn()) {
+      if (powerupId === 'panic' && this.game.panicActive[oppositeColor(this.myColor)]) {
+        return false;
+      }
+      return this.game.powerupsUsedThisTurn < MAX_INVENTORY_SLOTS;
+    }
+
+    if (def.usableOnOpponentTurn) {
+      return !this.game.panicActive[oppositeColor(this.myColor)];
+    }
+
+    return false;
+  }
+
   initiatePowerupSlot(slotIndex) {
-    if (!this.isMyTurn()) {
-      this.showToast('Wait for your turn to activate a powerup!', 'info');
+    const powerupId = this.game.inventories[this.myColor]?.[slotIndex];
+    const def = POWERUP_DEFS[powerupId];
+    if (!def) return;
+
+    if (!this.isMyTurn() && !def.usableOnOpponentTurn) {
+      this.showToast('Wait for your turn to activate this powerup!', 'info');
       return;
     }
-    if (this.game.powerupsUsedThisTurn >= MAX_INVENTORY_SLOTS) {
+    if (this.isMyTurn() && this.game.powerupsUsedThisTurn >= MAX_INVENTORY_SLOTS) {
       this.showToast('You have already used 2 powerups this turn! Now make your move.', 'info');
       return;
     }
-
-    const powerupId = this.game.inventories[this.myColor][slotIndex];
-    const def = POWERUP_DEFS[powerupId];
-    if (!def) return;
+    if (!this.canUsePowerupSlot(slotIndex)) {
+      return;
+    }
 
     this.selectedSquare = null;
     this.legalMovesForSelected = [];
@@ -1300,16 +1326,13 @@ class FogChessApp {
     const myInv = this.game.inventories[this.myColor] || [];
     const oppColor = oppositeColor(this.myColor);
     const oppInv = this.game.inventories[oppColor] || [];
-    const canActivateNow =
-      this.isMyTurn() &&
-      this.game.powerupsUsedThisTurn < MAX_INVENTORY_SLOTS &&
-      !this.game.winner;
 
     let mySlotsHTML = '';
     for (let i = 0; i < 2; i++) {
       const powerupId = myInv[i];
       if (powerupId && POWERUP_DEFS[powerupId]) {
         const def = POWERUP_DEFS[powerupId];
+        const canActivateSlot = this.canUsePowerupSlot(i);
         const isTargetingThis = this.targetingState && this.targetingState.slotIndex === i;
         mySlotsHTML += `
           <div class="powerup-slot slot-filled ${isTargetingThis ? 'slot-targeting' : ''}">
@@ -1321,7 +1344,7 @@ class FogChessApp {
             <button
               class="btn btn-xs ${isTargetingThis ? 'btn-accent' : 'btn-primary'} btn-use-powerup"
               data-slot="${i}"
-              ${!canActivateNow ? 'disabled' : ''}
+              ${!canActivateSlot ? 'disabled' : ''}
             >
               ${isTargetingThis ? 'Targeting...' : 'Use'}
             </button>

@@ -111,9 +111,10 @@ export const POWERUP_DEFS = {
     id: 'panic',
     name: 'Panic!',
     icon: '🚨',
-    shortDesc: 'Opponent only gets 10 seconds for their next move',
-    fullDesc: 'Puts a 10-second shot clock on your opponent’s upcoming turn! If time runs out, they forfeit their move.',
+    shortDesc: 'Opponent only gets 10s to move (playable on their turn too!)',
+    fullDesc: 'Puts a 10-second shot clock on your opponent’s turn! Can be activated on your turn OR during your opponent’s turn. If time runs out, they forfeit their move.',
     targetType: 'none',
+    usableOnOpponentTurn: true,
   },
   refuge: {
     id: 'refuge',
@@ -245,9 +246,18 @@ export class FogChessGame {
         this.itemBoxes.add(`${r},${c}`);
       }
     } else {
-      this.spawnRandomItemBox();
-      this.spawnRandomItemBox();
+      this.spawnInitialSymmetricItemBoxes();
     }
+  }
+
+  /**
+   * Spawns exactly 2 initial powerup boxes at game start:
+   * - 1 on the Black half (rows 2..3, random unoccupied square)
+   * - 1 on the White half (rows 4..5, random unoccupied square)
+   */
+  spawnInitialSymmetricItemBoxes() {
+    this.spawnRandomItemBox(2, 3);
+    this.spawnRandomItemBox(4, 5);
   }
 
   serializeState() {
@@ -376,11 +386,11 @@ export class FogChessGame {
     return Array.from(this.itemBoxes).map((key) => key.split(',').map(Number));
   }
 
-  spawnRandomItemBox() {
+  spawnRandomItemBox(minRow = 2, maxRow = 5) {
     if (this.itemBoxes.size >= MAX_BOARD_ITEMS) return null;
 
     const candidates = [];
-    for (let r = 2; r <= 5; r++) {
+    for (let r = minRow; r <= maxRow; r++) {
       for (let c = 0; c < 8; c++) {
         const key = `${r},${c}`;
         if (
@@ -684,24 +694,34 @@ export class FogChessGame {
   }
 
   usePowerup(color, slotIndex, params = {}) {
-    if (this.winner || color !== this.turn) {
-      return { ok: false, reason: 'You can only use powerups on your turn.' };
-    }
-    if (this.powerupsUsedThisTurn >= MAX_INVENTORY_SLOTS) {
-      return { ok: false, reason: 'You have already used 2 powerups this turn.' };
+    if (this.winner) {
+      return { ok: false, reason: 'The match is already over.' };
     }
 
     const inv = this.inventories[color];
-    if (slotIndex < 0 || slotIndex >= inv.length) {
+    if (!inv || slotIndex < 0 || slotIndex >= inv.length) {
       return { ok: false, reason: 'Invalid powerup slot.' };
     }
 
     const powerupId = inv[slotIndex];
+    const def = POWERUP_DEFS[powerupId];
+    const isMyTurn = color === this.turn;
+
+    if (!isMyTurn && !def?.usableOnOpponentTurn) {
+      return { ok: false, reason: 'You can only use this powerup on your turn.' };
+    }
+
+    if (isMyTurn && this.powerupsUsedThisTurn >= MAX_INVENTORY_SLOTS) {
+      return { ok: false, reason: 'You have already used 2 powerups this turn.' };
+    }
+
     const result = this.applyPowerupEffect(color, powerupId, params);
     if (!result.ok) return result;
 
     inv.splice(slotIndex, 1);
-    this.powerupsUsedThisTurn++;
+    if (isMyTurn) {
+      this.powerupsUsedThisTurn++;
+    }
 
     this.checkEndOfGameCondition();
 
@@ -896,10 +916,13 @@ export class FogChessGame {
       }
 
       case 'panic': {
+        if (this.panicActive[oppColor]) {
+          return { ok: false, reason: 'Opponent is already under Panic!' };
+        }
         this.panicActive[oppColor] = true;
         return {
           ok: true,
-          summary: `${POWERUP_DEFS.panic.icon} PANIC! ${oppColor === COLORS.WHITE ? 'White' : 'Black'} only has 10 seconds to make their next move!`,
+          summary: `${POWERUP_DEFS.panic.icon} PANIC! ${oppColor === COLORS.WHITE ? 'White' : 'Black'} only has 10 seconds to make their move!`,
         };
       }
 
@@ -1032,7 +1055,7 @@ export class FogChessGame {
   /**
    * Generates pseudo-legal moves for the piece at (r, c), supporting:
    * - Pieces on the 8x8 board (including Ghost passthrough, Feather jump, and Refuge outer-ring entry)
-   * - Pieces currently in the Outer Refuge Ring (re-entering adjacent 8x8 edge squares)
+   * - Pieces currently in the Outer Refuge Ring (re-entering the 8x8 board strictly via their natural movement patterns)
    */
   getPseudoMovesFrom(r, c, forAttackCheck = false) {
     // Case A: Piece is currently outside the board in the Outer Refuge Ring
@@ -1045,25 +1068,118 @@ export class FogChessGame {
       const color = refugePiece.color;
       const promoRank = color === COLORS.WHITE ? 0 : 7;
 
-      for (let dr = -1; dr <= 1; dr++) {
-        for (let dc = -1; dc <= 1; dc++) {
-          if (dr === 0 && dc === 0) continue;
-          const nr = r + dr;
-          const nc = c + dc;
-          if (!inBounds(nr, nc)) continue;
-          if (this.isWall(nr, nc)) continue;
-          const target = this.board[nr][nc];
-          if (target && (target.color === color || this.isShielded(nr, nc))) continue;
+      const canReenterOnBoard = (nr, nc) => {
+        if (!inBounds(nr, nc)) return false;
+        if (this.isWall(nr, nc)) return false;
+        const target = this.board[nr][nc];
+        if (!target) return true;
+        if (target.color === color) return false;
+        if (this.isShielded(nr, nc)) return false;
+        return true;
+      };
 
-          moves.push({
-            from: [r, c],
-            to: [nr, nc],
-            capture: Boolean(target),
-            promotion: refugePiece.type === PIECES.PAWN && nr === promoRank,
-            fromRefuge: true,
-          });
+      switch (refugePiece.type) {
+        case PIECES.PAWN: {
+          const dir = color === COLORS.WHITE ? -1 : 1;
+          const r1 = r + dir;
+          if (inBounds(r1, c) && !this.board[r1][c] && !this.isWall(r1, c)) {
+            moves.push({
+              from: [r, c],
+              to: [r1, c],
+              capture: false,
+              promotion: r1 === promoRank,
+              fromRefuge: true,
+            });
+          }
+          for (const dc of [-1, 1]) {
+            const nr = r + dir;
+            const nc = c + dc;
+            if (!inBounds(nr, nc) || this.isWall(nr, nc)) continue;
+            const target = this.board[nr][nc];
+            if (target && target.color !== color && !this.isShielded(nr, nc)) {
+              moves.push({
+                from: [r, c],
+                to: [nr, nc],
+                capture: true,
+                promotion: nr === promoRank,
+                fromRefuge: true,
+              });
+            } else if (!target && (c === -1 || c === 8)) {
+              // A pawn in the left/right refuge column re-enters diagonally forward onto the edge file
+              moves.push({
+                from: [r, c],
+                to: [nr, nc],
+                capture: false,
+                promotion: nr === promoRank,
+                fromRefuge: true,
+              });
+            }
+          }
+          break;
+        }
+
+        case PIECES.KNIGHT: {
+          const jumps = [
+            [-2, -1], [-2, 1], [-1, -2], [-1, 2],
+            [1, -2], [1, 2], [2, -1], [2, 1],
+          ];
+          for (const [dr, dc] of jumps) {
+            const nr = r + dr;
+            const nc = c + dc;
+            if (canReenterOnBoard(nr, nc)) {
+              moves.push({
+                from: [r, c],
+                to: [nr, nc],
+                capture: Boolean(this.board[nr][nc]),
+                fromRefuge: true,
+              });
+            }
+          }
+          break;
+        }
+
+        case PIECES.BISHOP:
+        case PIECES.ROOK:
+        case PIECES.QUEEN: {
+          const dirs = [];
+          if (refugePiece.type === PIECES.ROOK || refugePiece.type === PIECES.QUEEN) {
+            dirs.push([-1, 0], [1, 0], [0, -1], [0, 1]);
+          }
+          if (refugePiece.type === PIECES.BISHOP || refugePiece.type === PIECES.QUEEN) {
+            dirs.push([-1, -1], [-1, 1], [1, -1], [1, 1]);
+          }
+          for (const [dr, dc] of dirs) {
+            let nr = r + dr;
+            let nc = c + dc;
+            while (inBounds(nr, nc)) {
+              if (this.isWall(nr, nc)) break;
+              const target = this.board[nr][nc];
+              if (!target) {
+                moves.push({
+                  from: [r, c],
+                  to: [nr, nc],
+                  capture: false,
+                  fromRefuge: true,
+                });
+              } else {
+                if (target.color !== color && !this.isShielded(nr, nc)) {
+                  moves.push({
+                    from: [r, c],
+                    to: [nr, nc],
+                    capture: true,
+                    fromRefuge: true,
+                  });
+                }
+                break;
+              }
+              nr += dr;
+              nc += dc;
+            }
+          }
+          break;
         }
       }
+
       return moves;
     }
 
@@ -1323,28 +1439,16 @@ export class FogChessGame {
               featherJump: true,
             });
           }
-        }
-      }
-    }
-
-    // If piece has Refuge active and is on an edge square, also allow stepping 1 square directly
-    // outward into any adjacent Refuge border square
-    if (canEnterRefuge) {
-      for (let dr = -1; dr <= 1; dr++) {
-        for (let dc = -1; dc <= 1; dc++) {
-          if (dr === 0 && dc === 0) continue;
-          const nr = r + dr;
-          const nc = c + dc;
-          if (canLandOnRefugeRing(nr, nc)) {
-            const alreadyListed = moves.some((m) => m.to[0] === nr && m.to[1] === nc);
-            if (!alreadyListed) {
-              moves.push({
-                from: [r, c],
-                to: [nr, nc],
-                capture: Boolean(this.refugePieces.get(`${nr},${nc}`)),
-                toRefuge: true,
-              });
-            }
+        } else if (canLandOnRefugeRing(nr, nc)) {
+          const alreadyListed = moves.some((m) => m.to[0] === nr && m.to[1] === nc);
+          if (!alreadyListed) {
+            moves.push({
+              from: [r, c],
+              to: [nr, nc],
+              capture: Boolean(this.refugePieces.get(`${nr},${nc}`)),
+              toRefuge: true,
+              featherJump: true,
+            });
           }
         }
       }
