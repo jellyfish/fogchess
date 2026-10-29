@@ -10,8 +10,9 @@ A static, serverless multiplayer Fog of War Chess web application built for **Gi
 - **Capture the King Ruleset:**
   - No check or checkmate warnings. Moving into an attacked square or moving a pinned piece is legal.
   - A match is won by capturing the opponent's King (or by resignation), at which point the fog lifts to reveal the full board.
-- **Serverless Multiplayer Rooms (PeerJS / WebRTC + BroadcastChannel fallback):**
-  - Create a 6-character room code or share an invite link (`?room=XXXXXX`) to play directly peer-to-peer with zero backend infrastructure.
+- **Serverless WebSocket Rooms (MQTT-over-WSS + BroadcastChannel):**
+  - Connects via standard Secure WebSockets (`wss://`) across redundant public brokers so rooms work through **any** firewall, symmetric NAT, VPN, or browser (avoiding WebRTC ICE/TURN hole-punching failures) while remaining 100% static on GitHub Pages.
+  - Create a 6-character room code or share an invite link (`?room=XXXXXX`) to play directly.
   - Includes a one-click **"Open 2nd Player Tab"** button for local two-tab testing and a **Practice vs. Bot** mode.
 
 ## Running Locally

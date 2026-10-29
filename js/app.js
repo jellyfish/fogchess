@@ -195,6 +195,7 @@ class FogChessApp {
 
   startHostingRoom(code) {
     this.mode = 'online';
+    this.hasReceivedStartMatch = false;
     this.fogPeekDebug = false;
     this.peekFogBtn.classList.add('hidden');
 
@@ -219,6 +220,7 @@ class FogChessApp {
 
   startJoiningRoom(code) {
     this.mode = 'online';
+    this.hasReceivedStartMatch = false;
     this.fogPeekDebug = false;
     this.peekFogBtn.classList.add('hidden');
 
@@ -252,14 +254,19 @@ class FogChessApp {
   }
 
   handlePeerConnected() {
-    this.showToast('Opponent connected to room!', 'success');
     if (this.network.isHost) {
+      this.showToast('Opponent connected to room!', 'success');
       // Host assigns colors and starts the match
       const guestColor = oppositeColor(this.myColor);
       this.resetMatch(this.myColor);
       this.network.send({
         type: 'START_MATCH',
         yourColor: guestColor,
+      });
+    } else {
+      // Guest notifies host it is ready to receive match state
+      this.network.send({
+        type: 'GUEST_READY',
       });
     }
   }
@@ -272,12 +279,29 @@ class FogChessApp {
     if (!data || !data.type) return;
 
     switch (data.type) {
+      case 'GUEST_READY': {
+        if (this.network.isHost && this.game.history.length === 0) {
+          this.network.send({
+            type: 'START_MATCH',
+            yourColor: oppositeColor(this.myColor),
+          });
+        }
+        break;
+      }
+
       case 'START_MATCH': {
+        const alreadyStartedSameColor =
+          this.game.history.length === 0 &&
+          this.myColor === data.yourColor &&
+          this.hasReceivedStartMatch;
+        this.hasReceivedStartMatch = true;
         this.resetMatch(data.yourColor);
-        this.showToast(
-          `Match started! You are playing as ${data.yourColor === COLORS.WHITE ? 'White' : 'Black'}.`,
-          'success'
-        );
+        if (!alreadyStartedSameColor) {
+          this.showToast(
+            `Match started! You are playing as ${data.yourColor === COLORS.WHITE ? 'White' : 'Black'}.`,
+            'success'
+          );
+        }
         break;
       }
 

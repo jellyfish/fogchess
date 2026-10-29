@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FogChess — Multiplayer Fog of War Chess</title>
   <link rel="stylesheet" href="css/styles.css" />
-  <!-- PeerJS for 100% static GitHub Pages WebRTC P2P multiplayer rooms -->
-  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js" defer></script>
+  <!-- MQTT over Secure WebSockets (WSS) for instant, NAT-proof multiplayer rooms on GitHub Pages -->
+  <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js" defer></script>
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
@@ -39,7 +39,7 @@
         <section class="card">
           <h2 class="card-title">Multiplayer Room</h2>
           <p class="card-desc">
-            Peer-to-peer WebRTC rooms — hosted statically on GitHub Pages with zero backend servers.
+            Real-time WebSocket rooms — works through any firewall/NAT right from GitHub Pages.
           </p>
 
           <!-- Setup State (Create or Join) -->
