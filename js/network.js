@@ -1,16 +1,13 @@
 /**
- * FogChess Real-Time WebSocket Room Networking (v3)
+ * FogChess Real-Time WebSocket Room Networking (v5)
  *
- * Uses parallel Secure WebSockets (MQTT-over-WSS) across port 443 and 8084/8884 brokers
- * with automatic message deduplication so laptop <-> phone connections work even when
- * mobile carriers restrict non-443 ports.
+ * Uses parallel Secure WebSockets (MQTT-over-WSS) across port 443 and 8084/8884 brokers.
+ * Supports seamless reconnection & state recovery: whichever player is already in the room
+ * responds to a joining/rejoining peer and syncs the live match state without wiping the game.
  */
 
 const TOPIC_PREFIX = 'fogchess/v1/room/';
 
-// Connect to multiple public WSS brokers in parallel (includes port 443 for strict mobile networks).
-// Since both clients connect to all reachable brokers and deduplicate by `msgId`,
-// any single common reachable broker bridges the laptop and phone!
 const WSS_BROKERS = [
   'wss://mqtt.eclipseprojects.io:443/mqtt',
   'wss://broker.emqx.io:8084/mqtt',
@@ -18,7 +15,7 @@ const WSS_BROKERS = [
 ];
 
 export function generateRoomCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // unambiguous characters
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < 6; i++) {
     code += chars[Math.floor(Math.random() * chars.length)];
@@ -30,9 +27,21 @@ function randomId(prefix = 'p') {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`;
 }
 
+function getOrCreateTabClientId() {
+  try {
+    const existing = sessionStorage.getItem('fogchess_tab_client_id');
+    if (existing) return existing;
+    const created = randomId('player');
+    sessionStorage.setItem('fogchess_tab_client_id', created);
+    return created;
+  } catch (_) {
+    return randomId('player');
+  }
+}
+
 export class RoomNetwork {
   constructor({ onStatusChange, onPeerConnected, onMessage, onPeerDisconnected, onError }) {
-    this.clientId = randomId('player');
+    this.clientId = getOrCreateTabClientId();
     this.opponentId = null;
     this.mqttClients = [];
     this.broadcastChannel = null;
@@ -65,7 +74,7 @@ export class RoomNetwork {
    * Host a new room with the given 6-char roomCode.
    */
   hostRoom(roomCode) {
-    this.cleanup();
+    this.cleanup(false);
     this.isHost = true;
     this.roomCode = roomCode.toUpperCase().trim();
 
@@ -79,17 +88,16 @@ export class RoomNetwork {
   }
 
   /**
-   * Join an existing hosted room by 6-char roomCode.
+   * Join or rejoin an existing room by 6-char roomCode.
    */
   joinRoom(roomCode) {
-    this.cleanup();
+    this.cleanup(false);
     this.isHost = false;
     this.roomCode = roomCode.toUpperCase().trim();
 
     this.onStatusChange('connecting', `Joining room ${this.roomCode}...`);
     this.setupLocalBroadcastChannel();
 
-    // Also ping local BroadcastChannel for instant same-browser 2-tab testing
     this.publishLocal({ type: '__JOIN_REQUEST__' });
 
     this.connectWebSocketPool(() => {
@@ -121,12 +129,12 @@ export class RoomNetwork {
     this.joinTimeoutTimer = setTimeout(() => {
       if (!this.connected) {
         clearInterval(this.joinRetryTimer);
-        this.onError(
-          `Could not find host in room "${this.roomCode}". Check the code and ensure the host screen is open.`
-        );
-        this.onStatusChange('disconnected', `Room ${this.roomCode} not found`);
+        // If no existing peer answered, promote this client to waiting room member so if the other
+        // player joins/rejoins next, this client will answer them!
+        this.isHost = true;
+        this.onStatusChange('waiting', `Waiting for opponent in room ${this.roomCode}...`);
       }
-    }, 9500);
+    }, 6500);
   }
 
   connectWebSocketPool(onFirstBrokerReady) {
@@ -170,7 +178,6 @@ export class RoomNetwork {
                 firstReadyFired = true;
                 onFirstBrokerReady();
               } else if (!this.isHost && !this.connected) {
-                // Newly connected secondary broker: immediately send a join request on it too!
                 this.publishRaw({ type: '__JOIN_REQUEST__' });
               }
             }
@@ -210,60 +217,46 @@ export class RoomNetwork {
   handleIncomingPacket(packet) {
     if (!packet || !packet.senderId || packet.senderId === this.clientId) return;
 
-    // Deduplicate packets received across multiple brokers / BroadcastChannel
     if (packet.msgId) {
       if (this.seenMsgIds.has(packet.msgId)) return;
       this.seenMsgIds.add(packet.msgId);
     }
 
-    // If packet is addressed to a specific peer, ignore if not for us
     if (packet.targetId && packet.targetId !== this.clientId) return;
 
     switch (packet.type) {
       case '__JOIN_REQUEST__': {
-        if (!this.isHost) return;
-        if (this.connected && this.opponentId && this.opponentId !== packet.senderId) {
-          this.publishRaw({
-            type: '__ROOM_FULL__',
-            targetId: packet.senderId,
-          });
-          return;
-        }
-
-        const isNewConnection = !this.connected || this.opponentId !== packet.senderId;
+        // Any established peer in the room (whether original host or remaining player after a drop)
+        // can accept a joining/rejoining opponent and sync state!
+        const isReconnectOrNew = !this.connected || this.opponentId !== packet.senderId;
         this.opponentId = packet.senderId;
         this.connected = true;
+        clearInterval(this.joinRetryTimer);
+        clearTimeout(this.joinTimeoutTimer);
 
         this.publishRaw({
           type: '__JOIN_ACK__',
           targetId: packet.senderId,
         });
 
-        if (isNewConnection) {
+        if (isReconnectOrNew) {
           this.onStatusChange('connected', `Connected to room ${this.roomCode}`);
-          this.onPeerConnected();
+          this.onPeerConnected({ isResponder: true });
         }
         break;
       }
 
       case '__JOIN_ACK__': {
-        if (this.isHost || this.connected) return;
+        const isNewAck = !this.connected || this.opponentId !== packet.senderId;
         this.opponentId = packet.senderId;
         this.connected = true;
         clearInterval(this.joinRetryTimer);
         clearTimeout(this.joinTimeoutTimer);
 
-        this.onStatusChange('connected', `Connected to room ${this.roomCode}`);
-        this.onPeerConnected();
-        break;
-      }
-
-      case '__ROOM_FULL__': {
-        if (this.isHost || this.connected) return;
-        clearInterval(this.joinRetryTimer);
-        clearTimeout(this.joinTimeoutTimer);
-        this.onError(`Room ${this.roomCode} already has two players.`);
-        this.cleanup();
+        if (isNewAck) {
+          this.onStatusChange('connected', `Connected to room ${this.roomCode}`);
+          this.onPeerConnected({ isResponder: false });
+        }
         break;
       }
 
@@ -271,7 +264,7 @@ export class RoomNetwork {
         if (this.opponentId && packet.senderId !== this.opponentId) return;
         this.connected = false;
         this.opponentId = null;
-        this.onStatusChange('disconnected', 'Opponent left the room.');
+        this.onStatusChange('waiting', `Opponent disconnected — waiting for rejoin in ${this.roomCode}...`);
         this.onPeerDisconnected();
         break;
       }
@@ -322,8 +315,8 @@ export class RoomNetwork {
     });
   }
 
-  cleanup() {
-    if (this.connected && this.roomCode) {
+  cleanup(notifyLeave = true) {
+    if (notifyLeave && this.connected && this.roomCode) {
       this.publishRaw({ type: '__PEER_LEAVE__' });
     }
     this.connected = false;

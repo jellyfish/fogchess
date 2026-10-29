@@ -1,14 +1,13 @@
 /**
- * FogChess: Powerup Edition Engine
+ * FogChess: Powerup Edition Engine (v5)
  *
- * Combines Chess ("Capture the King" ruleset) with Mario Kart-style Mystery Item Boxes:
+ * Combines Chess ("Capture the King" ruleset + Check alerts) with Mario Kart-style Mystery Item Boxes:
  * - Board is normally fully visible to both players.
- * - Rainbow '?' Item Boxes spawn randomly on unoccupied squares in the middle ranks (ranks 3-6),
- *   up to a maximum of 3 boxes on the board at once.
+ * - Rainbow '?' Item Boxes spawn on unoccupied squares in the middle ranks (ranks 3-6),
+ *   up to a maximum of 3 boxes on the board at once, with a random 2-5 turn delay before replenishing.
  * - Landing a piece on an Item Box consumes it and grants a random powerup (max 2 held per player).
- * - Only the player who collects a powerup sees what it is; the opponent only sees mystery [?] slots
- *   until the powerup is activated.
- * - On your turn, you may activate 1 powerup as a free bonus action BEFORE making your chess move.
+ * - Players may use up to 2 powerups on a single turn before making their move.
+ * - Full state serialization/deserialization so rejoining a room restores the live game & inventories.
  */
 
 export const COLORS = {
@@ -32,7 +31,7 @@ export const POWERUP_DEFS = {
     icon: '🌫️',
     shortDesc: 'Blind opponent with Fog of War for 1–3 turns',
     fullDesc: 'Inflicts Fog of War on your opponent for 1–3 of their turns (they only see what their pieces see, while you see the full board).',
-    targetType: 'none', // activates immediately
+    targetType: 'none',
   },
   wall: {
     id: 'wall',
@@ -104,6 +103,14 @@ export function randomPowerupId() {
   return POWERUP_IDS[Math.floor(Math.random() * POWERUP_IDS.length)];
 }
 
+/**
+ * Rolls a random replenishment delay of 2 to 5 full turns (4 to 10 half-turns).
+ */
+export function rollReplenishDelayHalfTurns() {
+  const fullTurns = Math.floor(Math.random() * 4) + 2; // 2, 3, 4, or 5 full turns
+  return fullTurns * 2;
+}
+
 export class FogChessGame {
   constructor(initialItemCoords = null) {
     this.reset(initialItemCoords);
@@ -125,27 +132,21 @@ export class FogChessGame {
     this.winReason = null;
 
     // Powerup & status state
-    // Map of "r,c" -> true for rainbow '?' boxes on the board
     this.itemBoxes = new Set();
-    // Inventories: each player holds up to 2 powerup IDs (e.g. ['fog', 'wall'])
     this.inventories = {
       w: [],
       b: [],
     };
-    this.usedPowerupThisTurn = false;
-    this.turnsSinceLastSpawn = 0;
+    this.powerupsUsedThisTurn = 0;
+    // Countdown in half-turns before another '?' box spawns (2-5 full turns = 4-10 half-turns)
+    this.turnsUntilNextSpawn = rollReplenishDelayHalfTurns();
 
     // Active board/player effects:
-    // Fog of War remaining turns per player: if > 0, that player is shrouded in fog!
     this.fogTurns = { w: 0, b: 0 };
-    // Map of "r,c" -> remaining half-turns (starts at 4 = 2 full rounds)
-    this.walls = new Map();
-    // Map of "r,c" -> { color, turnsLeft } for Star Shielded pieces
-    this.shields = new Map();
-    // Map of "r,c" -> { color, turnsLeft } for Frozen pieces
-    this.frozen = new Map();
-    // Map of "r,c" -> true for Feather Jump active on current turn
-    this.featherSquares = new Set();
+    this.walls = new Map(); // "r,c" -> remaining half-turns
+    this.shields = new Map(); // "r,c" -> { color, turnsLeft }
+    this.frozen = new Map(); // "r,c" -> { color, turnsLeft }
+    this.featherSquares = new Set(); // "r,c"
 
     if (Array.isArray(initialItemCoords)) {
       for (const [r, c] of initialItemCoords) {
@@ -156,6 +157,101 @@ export class FogChessGame {
       this.spawnRandomItemBox();
       this.spawnRandomItemBox();
     }
+  }
+
+  /**
+   * Serializes the entire live match state (including both players' powerups, active effects,
+   * board, turn, and move history) so a joining/rejoining client can restore it without resetting.
+   */
+  serializeState() {
+    return {
+      board: this.board.map((row) => row.map((cell) => (cell ? { ...cell } : null))),
+      turn: this.turn,
+      castlingRights: {
+        w: { ...this.castlingRights.w },
+        b: { ...this.castlingRights.b },
+      },
+      enPassantTarget: this.enPassantTarget ? [...this.enPassantTarget] : null,
+      halfMoveClock: this.halfMoveClock,
+      fullMoveNumber: this.fullMoveNumber,
+      history: this.history.map((h) => ({ ...h })),
+      captured: {
+        w: [...this.captured.w],
+        b: [...this.captured.b],
+      },
+      winner: this.winner,
+      winReason: this.winReason,
+      itemBoxes: Array.from(this.itemBoxes),
+      inventories: {
+        w: [...this.inventories.w],
+        b: [...this.inventories.b],
+      },
+      powerupsUsedThisTurn: this.powerupsUsedThisTurn,
+      turnsUntilNextSpawn: this.turnsUntilNextSpawn,
+      fogTurns: { ...this.fogTurns },
+      walls: Array.from(this.walls.entries()),
+      shields: Array.from(this.shields.entries()),
+      frozen: Array.from(this.frozen.entries()),
+      featherSquares: Array.from(this.featherSquares),
+    };
+  }
+
+  /**
+   * Restores a serialized match state onto this game instance.
+   */
+  loadState(state) {
+    if (!state || !Array.isArray(state.board)) return false;
+
+    this.board = state.board.map((row) => row.map((cell) => (cell ? { ...cell } : null)));
+    this.turn = state.turn || COLORS.WHITE;
+    this.castlingRights = {
+      w: { ...(state.castlingRights?.w || { k: true, q: true }) },
+      b: { ...(state.castlingRights?.b || { k: true, q: true }) },
+    };
+    this.enPassantTarget = state.enPassantTarget ? [...state.enPassantTarget] : null;
+    this.halfMoveClock = state.halfMoveClock || 0;
+    this.fullMoveNumber = state.fullMoveNumber || 1;
+    this.history = Array.isArray(state.history) ? state.history.map((h) => ({ ...h })) : [];
+    this.captured = {
+      w: Array.isArray(state.captured?.w) ? [...state.captured.w] : [],
+      b: Array.isArray(state.captured?.b) ? [...state.captured.b] : [],
+    };
+    this.winner = state.winner || null;
+    this.winReason = state.winReason || null;
+
+    this.itemBoxes = new Set(Array.isArray(state.itemBoxes) ? state.itemBoxes : []);
+    this.inventories = {
+      w: Array.isArray(state.inventories?.w) ? [...state.inventories.w] : [],
+      b: Array.isArray(state.inventories?.b) ? [...state.inventories.b] : [],
+    };
+    this.powerupsUsedThisTurn = state.powerupsUsedThisTurn || 0;
+    this.turnsUntilNextSpawn =
+      typeof state.turnsUntilNextSpawn === 'number'
+        ? state.turnsUntilNextSpawn
+        : rollReplenishDelayHalfTurns();
+
+    this.fogTurns = {
+      w: state.fogTurns?.w || 0,
+      b: state.fogTurns?.b || 0,
+    };
+    this.walls = new Map(Array.isArray(state.walls) ? state.walls : []);
+    this.shields = new Map(Array.isArray(state.shields) ? state.shields : []);
+    this.frozen = new Map(Array.isArray(state.frozen) ? state.frozen : []);
+    this.featherSquares = new Set(Array.isArray(state.featherSquares) ? state.featherSquares : []);
+
+    return true;
+  }
+
+  isMatchInProgress() {
+    return (
+      this.history.length > 0 ||
+      this.powerupsUsedThisTurn > 0 ||
+      this.walls.size > 0 ||
+      this.shields.size > 0 ||
+      this.frozen.size > 0 ||
+      this.fogTurns.w > 0 ||
+      this.fogTurns.b > 0
+    );
   }
 
   createInitialBoard() {
@@ -175,11 +271,6 @@ export class FogChessGame {
     return Array.from(this.itemBoxes).map((key) => key.split(',').map(Number));
   }
 
-  /**
-   * Finds all unoccupied, non-walled, non-item squares in the middle 4 ranks (rows 2, 3, 4, 5)
-   * and spawns 1 new rainbow '?' item box if fewer than MAX_BOARD_ITEMS exist.
-   * Returns [r, c] of the spawned box, or null if none spawned.
-   */
   spawnRandomItemBox() {
     if (this.itemBoxes.size >= MAX_BOARD_ITEMS) return null;
 
@@ -224,6 +315,35 @@ export class FogChessGame {
   }
 
   /**
+   * Finds the [r, c] coordinates of `color`'s King, or null if captured.
+   */
+  findKingSquare(color) {
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const p = this.board[r][c];
+        if (p && p.color === color && p.type === PIECES.KING) {
+          return [r, c];
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Returns true if `color`'s King is currently under attack (in Check) by any enemy piece.
+   * Respects Stone Walls and Frozen enemy pieces.
+   */
+  isKingInCheck(color) {
+    if (this.winner) return false;
+    const kingSq = this.findKingSquare(color);
+    if (!kingSq) return false;
+    const [kr, kc] = kingSq;
+    const attackerColor = oppositeColor(color);
+    const enemyMoves = this.getAllMoves(attackerColor);
+    return enemyMoves.some((m) => m.to[0] === kr && m.to[1] === kc);
+  }
+
+  /**
    * Computes the set of visible squares (as "r,c" strings) for `viewerColor`.
    * If `viewerColor` is NOT currently affected by Fog Cloud, all 64 squares are visible!
    */
@@ -246,7 +366,6 @@ export class FogChessGame {
 
         visible.add(`${r},${c}`);
 
-        // If piece has Feather Jump active this turn, it also sees Knight jump squares
         if (this.hasFeather(r, c)) {
           const jumps = [
             [-2, -1], [-2, 1], [-1, -2], [-1, 2],
@@ -354,17 +473,14 @@ export class FogChessGame {
 
   /**
    * Validates and executes a powerup activation before the current player's move.
-   * `params` contains target coordinates depending on the powerup:
-   * - fog: { duration?: 1..3 }
-   * - wall: { square: [r, c] }
-   * - shield: { square: [r, c] }
-   * - freeze: { square: [r, c] }
-   * - feather: { square: [r, c] }
-   * - swap: { squareA: [r1, c1], squareB: [r2, c2] }
+   * Players may use up to 2 powerups (their entire inventory) on a single turn!
    */
   usePowerup(color, slotIndex, params = {}) {
-    if (this.winner || color !== this.turn || this.usedPowerupThisTurn) {
-      return { ok: false, reason: 'You can only use 1 powerup on your turn before moving.' };
+    if (this.winner || color !== this.turn) {
+      return { ok: false, reason: 'You can only use powerups on your turn.' };
+    }
+    if (this.powerupsUsedThisTurn >= MAX_INVENTORY_SLOTS) {
+      return { ok: false, reason: 'You have already used 2 powerups this turn.' };
     }
 
     const inv = this.inventories[color];
@@ -376,9 +492,9 @@ export class FogChessGame {
     const result = this.applyPowerupEffect(color, powerupId, params);
     if (!result.ok) return result;
 
-    // Remove from inventory & mark used this turn
+    // Remove from inventory & increment counter
     inv.splice(slotIndex, 1);
-    this.usedPowerupThisTurn = true;
+    this.powerupsUsedThisTurn++;
 
     return {
       ok: true,
@@ -409,9 +525,8 @@ export class FogChessGame {
         const [r, c] = sq;
         const key = `${r},${c}`;
         if (this.board[r][c] || this.isWall(r, c) || this.itemBoxes.has(key)) {
-          return { ok: false, reason: 'Stone Wall must be placed on an completely empty square.' };
+          return { ok: false, reason: 'Stone Wall must be placed on a completely empty square.' };
         }
-        // Lasts 4 half-turns (2 full rounds)
         this.walls.set(key, 4);
         return {
           ok: true,
@@ -431,7 +546,6 @@ export class FogChessGame {
           return { ok: false, reason: 'Star Shield can only target your own non-King piece.' };
         }
         const key = `${r},${c}`;
-        // Lasts 2 half-turns (your current turn + opponent's upcoming turn)
         this.shields.set(key, { color, turnsLeft: 2 });
         return {
           ok: true,
@@ -451,7 +565,6 @@ export class FogChessGame {
           return { ok: false, reason: 'Ice Freeze can only target an enemy non-King piece.' };
         }
         const key = `${r},${c}`;
-        // Lasts through opponent's next turn (2 half-turns)
         this.frozen.set(key, { color: oppColor, turnsLeft: 2 });
         return {
           ok: true,
@@ -500,24 +613,20 @@ export class FogChessGame {
         ) {
           return { ok: false, reason: 'Both targets must be your own non-King pieces.' };
         }
-        // Prevent swapping a pawn directly onto promotion rank (row 0 or 7) or back-rank invalidly
         const promoRank = color === COLORS.WHITE ? 0 : 7;
         if ((p1.type === PIECES.PAWN && r2 === promoRank) || (p2.type === PIECES.PAWN && r1 === promoRank)) {
           return { ok: false, reason: 'Cannot swap a Pawn directly onto the promotion rank.' };
         }
 
-        // Swap pieces on board
         this.board[r1][c1] = p2;
         this.board[r2][c2] = p1;
 
-        // Swap any shield/freeze/feather statuses attached to those squares
         const key1 = `${r1},${c1}`;
         const key2 = `${r2},${c2}`;
         this.swapMapKeys(this.shields, key1, key2);
         this.swapMapKeys(this.frozen, key1, key2);
         this.swapSetKeys(this.featherSquares, key1, key2);
 
-        // Update rook castling rights if a rook swapped off its home corner
         const homeRank = color === COLORS.WHITE ? 7 : 0;
         if ((r1 === homeRank && c1 === 0) || (r2 === homeRank && c2 === 0)) {
           this.castlingRights[color].q = false;
@@ -565,7 +674,6 @@ export class FogChessGame {
     const piece = this.board[r][c];
     if (!piece || piece.color !== this.turn) return [];
 
-    // Frozen pieces cannot move!
     if (this.isFrozen(r, c)) return [];
 
     const moves = [];
@@ -578,7 +686,7 @@ export class FogChessGame {
       const target = this.board[nr][nc];
       if (!target) return true;
       if (target.color === color) return false;
-      if (this.isShielded(nr, nc)) return false; // Star Shield blocks capture!
+      if (this.isShielded(nr, nc)) return false;
       return true;
     };
 
@@ -587,7 +695,6 @@ export class FogChessGame {
         const dir = color === COLORS.WHITE ? -1 : 1;
         const startRank = color === COLORS.WHITE ? 6 : 1;
 
-        // 1 step forward (blocked by pieces OR walls)
         const r1 = r + dir;
         if (inBounds(r1, c) && !this.board[r1][c] && !this.isWall(r1, c)) {
           moves.push({
@@ -596,7 +703,6 @@ export class FogChessGame {
             promotion: r1 === promoRank,
           });
 
-          // 2 steps forward
           const r2 = r + 2 * dir;
           if (
             r === startRank &&
@@ -612,7 +718,6 @@ export class FogChessGame {
           }
         }
 
-        // Captures (diagonal + en passant)
         for (const dc of [-1, 1]) {
           const nr = r + dir;
           const nc = c + dc;
@@ -695,7 +800,7 @@ export class FogChessGame {
           let nr = r + dr;
           let nc = c + dc;
           while (inBounds(nr, nc)) {
-            if (this.isWall(nr, nc)) break; // Wall blocks sliding ray
+            if (this.isWall(nr, nc)) break;
             const target = this.board[nr][nc];
             if (!target) {
               moves.push({ from: [r, c], to: [nr, nc], capture: false });
@@ -713,7 +818,6 @@ export class FogChessGame {
       }
     }
 
-    // If this piece has Feather Jump active this turn, add Knight jump moves!
     if (this.hasFeather(r, c) && piece.type !== PIECES.KNIGHT) {
       const jumps = [
         [-2, -1], [-2, 1], [-1, -2], [-1, 2],
@@ -748,7 +852,6 @@ export class FogChessGame {
     const rights = this.castlingRights[color];
     if (!rights) return moves;
 
-    // Kingside castling
     if (
       rights.k &&
       !this.board[homeRank][5] &&
@@ -766,7 +869,6 @@ export class FogChessGame {
       });
     }
 
-    // Queenside castling
     if (
       rights.q &&
       !this.board[homeRank][3] &&
@@ -807,10 +909,6 @@ export class FogChessGame {
 
   /**
    * Executes a move `{ from: [r1, c1], to: [r2, c2] }`.
-   * Optional `options`:
-   * - `promotionPiece`: 'q'|'r'|'b'|'n'
-   * - `awardedPowerup`: specific powerup ID if synced/deterministic
-   * - `spawnedItem`: [r, c] or null (if null/undefined and local move, rolls automatically)
    */
   makeMove(from, to, promotionPiece = PIECES.QUEEN, options = {}) {
     const [r1, c1] = from;
@@ -826,7 +924,6 @@ export class FogChessGame {
     let capturedPiece = this.board[r2][c2] ? { ...this.board[r2][c2] } : null;
     let capturedSquare = capturedPiece ? [r2, c2] : null;
 
-    // Handle En Passant capture
     if (matched.enPassant) {
       const epPawnRow = r1;
       const epPawnCol = c2;
@@ -837,7 +934,6 @@ export class FogChessGame {
       this.shields.delete(`${epPawnRow},${epPawnCol}`);
     }
 
-    // Clear any status on captured destination square
     const fromKey = `${r1},${c1}`;
     const toKey = `${r2},${c2}`;
     if (capturedPiece) {
@@ -845,7 +941,6 @@ export class FogChessGame {
       this.shields.delete(toKey);
     }
 
-    // Move piece & carry over any active Star Shield on the moving piece
     this.board[r2][c2] = movingPiece;
     this.board[r1][c1] = null;
     if (this.shields.has(fromKey)) {
@@ -854,14 +949,12 @@ export class FogChessGame {
       this.shields.set(toKey, shieldData);
     }
 
-    // Handle Pawn Promotion
     let promotedTo = null;
     if (matched.promotion) {
       promotedTo = promotionPiece || PIECES.QUEEN;
       this.board[r2][c2] = { type: promotedTo, color: moverColor };
     }
 
-    // Handle Castling rook move
     if (matched.castling === 'k') {
       this.board[r1][5] = this.board[r1][7];
       this.board[r1][7] = null;
@@ -870,7 +963,6 @@ export class FogChessGame {
       this.board[r1][0] = null;
     }
 
-    // Update castling rights
     if (movingPiece.type === PIECES.KING) {
       this.castlingRights[moverColor].k = false;
       this.castlingRights[moverColor].q = false;
@@ -886,7 +978,6 @@ export class FogChessGame {
       if (r2 === enemyHomeRank && c2 === 7) this.castlingRights[capturedPiece.color].k = false;
     }
 
-    // Update En Passant target
     if (matched.doublePawnPush) {
       const dir = moverColor === COLORS.WHITE ? -1 : 1;
       this.enPassantTarget = [r1 + dir, c1];
@@ -894,12 +985,12 @@ export class FogChessGame {
       this.enPassantTarget = null;
     }
 
-    // Record captured piece
     if (capturedPiece) {
       this.captured[capturedPiece.color].push(capturedPiece.type);
     }
 
-    // Check if the destination square had a Rainbow '?' Item Box!
+    // Check if the destination square had a Rainbow '?' Item Box
+    const wasAtMaxBoxesBeforeMove = this.itemBoxes.size >= MAX_BOARD_ITEMS;
     let pickedUpBox = false;
     let grantedPowerup = null;
     let inventoryWasFull = false;
@@ -913,58 +1004,57 @@ export class FogChessGame {
       } else {
         inventoryWasFull = true;
       }
+      // If picking up this box dropped the board below max capacity, or to enforce a 2-5 turn delay
+      // after a pickup, ensure turnsUntilNextSpawn is at least a fresh 2-5 turn delay!
+      if (wasAtMaxBoxesBeforeMove || this.turnsUntilNextSpawn <= 2) {
+        this.turnsUntilNextSpawn = rollReplenishDelayHalfTurns();
+      }
     }
 
-    // Tick down turn-based effects at the end of this player's move:
-    // 1. If this player was shrouded in Fog of War, decrement their remaining fog turns
+    // Tick down turn-based effects at the end of this player's move
     if (this.fogTurns[moverColor] > 0) {
       this.fogTurns[moverColor]--;
     }
 
-    // 2. Decrement walls
     for (const [k, left] of this.walls.entries()) {
       if (left <= 1) this.walls.delete(k);
       else this.walls.set(k, left - 1);
     }
 
-    // 3. Decrement shields
     for (const [k, data] of this.shields.entries()) {
       if (data.turnsLeft <= 1) this.shields.delete(k);
       else this.shields.set(k, { ...data, turnsLeft: data.turnsLeft - 1 });
     }
 
-    // 4. Decrement freeze
     for (const [k, data] of this.frozen.entries()) {
       if (data.turnsLeft <= 1) this.frozen.delete(k);
       else this.frozen.set(k, { ...data, turnsLeft: data.turnsLeft - 1 });
     }
 
-    // 5. Clear Feather Jump at end of turn
     this.featherSquares.clear();
-    this.usedPowerupThisTurn = false;
+    this.powerupsUsedThisTurn = 0;
 
-    // 6. Handle random spawning of new '?' item boxes (max 3 on board)
-    this.turnsSinceLastSpawn++;
+    // Handle delayed replenishment of '?' item boxes (2-5 full turns = 4-10 half-turns)
+    // Never spawn on the exact same move a box was picked up!
     let spawnedItem = null;
     if ('spawnedItem' in options) {
-      // Network move explicitly specifies whether an item spawned
       if (options.spawnedItem) {
         const [sr, sc] = options.spawnedItem;
         if (this.itemBoxes.size < MAX_BOARD_ITEMS) {
           this.itemBoxes.add(`${sr},${sc}`);
           spawnedItem = [sr, sc];
-          this.turnsSinceLastSpawn = 0;
         }
+        this.turnsUntilNextSpawn = rollReplenishDelayHalfTurns();
+      } else if (this.itemBoxes.size < MAX_BOARD_ITEMS && !pickedUpBox) {
+        this.turnsUntilNextSpawn = Math.max(1, this.turnsUntilNextSpawn - 1);
       }
     } else {
-      // Local move: spawn if >= 2 half-turns since last spawn (with 65% chance, or guaranteed at 3 half-turns)
-      const shouldSpawn =
-        this.itemBoxes.size < MAX_BOARD_ITEMS &&
-        (this.turnsSinceLastSpawn >= 3 ||
-          (this.turnsSinceLastSpawn >= 2 && Math.random() < 0.65));
-      if (shouldSpawn) {
-        spawnedItem = this.spawnRandomItemBox();
-        if (spawnedItem) this.turnsSinceLastSpawn = 0;
+      if (this.itemBoxes.size < MAX_BOARD_ITEMS && !pickedUpBox) {
+        this.turnsUntilNextSpawn--;
+        if (this.turnsUntilNextSpawn <= 0) {
+          spawnedItem = this.spawnRandomItemBox();
+          this.turnsUntilNextSpawn = rollReplenishDelayHalfTurns();
+        }
       }
     }
 
@@ -987,13 +1077,11 @@ export class FogChessGame {
 
     this.history.push(moveRecord);
 
-    // Check if King was captured
     if (capturedPiece?.type === PIECES.KING) {
       this.winner = moverColor;
       this.winReason = 'King captured';
     }
 
-    // Advance turn
     if (this.turn === COLORS.BLACK) {
       this.fullMoveNumber++;
     }
@@ -1008,9 +1096,6 @@ export class FogChessGame {
     this.winReason = 'Resignation';
   }
 
-  /**
-   * Formats a move for a given viewer's perspective (masks unseen squares if viewer is currently Fogged).
-   */
   formatMoveForViewer(moveRecord, viewerColor, visibleSquares) {
     const boxTag = moveRecord.pickedUpBox ? ' 🎁' : '';
     if (!viewerColor || moveRecord.color === viewerColor || !this.isPlayerFogged(viewerColor)) {
@@ -1019,7 +1104,6 @@ export class FogChessGame {
       return `${moveRecord.piece.toUpperCase()} ${coordsToAlgebraic(...moveRecord.from)} ${cap} ${coordsToAlgebraic(...moveRecord.to)}${promo}${boxTag}`;
     }
 
-    // Viewer is currently blinded by Fog Cloud: mask unseen opponent coordinates
     const fromVisible = visibleSquares.has(`${moveRecord.from[0]},${moveRecord.from[1]}`);
     const toVisible = visibleSquares.has(`${moveRecord.to[0]},${moveRecord.to[1]}`);
 

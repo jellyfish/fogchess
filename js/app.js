@@ -3,11 +3,12 @@ import {
   COLORS,
   PIECES,
   POWERUP_DEFS,
+  MAX_INVENTORY_SLOTS,
   coordsToAlgebraic,
   oppositeColor,
-} from './chess.js?v=4';
-import { RoomNetwork, generateRoomCode } from './network.js?v=4';
-import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=4';
+} from './chess.js?v=5';
+import { RoomNetwork, generateRoomCode } from './network.js?v=5';
+import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=5';
 
 class FogChessApp {
   constructor() {
@@ -20,7 +21,7 @@ class FogChessApp {
     this.legalMovesForSelected = [];
     this.pendingPromotionMove = null;
     this.fogPeekDebug = false;
-    this.hasReceivedStartMatch = false;
+    this.hasSyncedInitialState = false;
 
     // Powerup targeting state:
     // null or { slotIndex, powerupId, step, firstSquare?: [r, c] }
@@ -28,7 +29,7 @@ class FogChessApp {
 
     this.network = new RoomNetwork({
       onStatusChange: (state, text) => this.handleNetworkStatus(state, text),
-      onPeerConnected: () => this.handlePeerConnected(),
+      onPeerConnected: (info) => this.handlePeerConnected(info),
       onMessage: (data) => this.handleNetworkMessage(data),
       onPeerDisconnected: () => this.handlePeerDisconnected(),
       onError: (msg) => this.showToast(msg, 'error'),
@@ -64,6 +65,7 @@ class FogChessApp {
     this.connectionText = document.getElementById('connection-text');
     this.turnBanner = document.getElementById('turn-banner');
     this.myRoleBadge = document.getElementById('my-role-badge');
+    this.checkAlertBadge = document.getElementById('check-alert-badge');
     this.visibleCountBadge = document.getElementById('visible-count-badge');
     this.moveListEl = document.getElementById('move-list');
     this.capturedWhiteEl = document.getElementById('captured-white');
@@ -134,7 +136,9 @@ class FogChessApp {
     });
 
     this.leaveRoomBtn.addEventListener('click', () => {
-      this.network.cleanup();
+      const oldCode = this.network.roomCode;
+      this.network.cleanup(true);
+      this.clearRoomSnapshot(oldCode);
       this.activeRoomPanel.classList.add('hidden');
       this.lobbySetupPanel.classList.remove('hidden');
       window.history.replaceState({}, '', window.location.pathname);
@@ -143,7 +147,7 @@ class FogChessApp {
     });
 
     this.practiceBotBtn.addEventListener('click', () => {
-      this.network.cleanup();
+      this.network.cleanup(true);
       this.mode = 'bot';
       this.activeRoomPanel.classList.add('hidden');
       this.lobbySetupPanel.classList.remove('hidden');
@@ -173,6 +177,7 @@ class FogChessApp {
     this.resignBtn.addEventListener('click', () => {
       if (this.game.winner) return;
       this.game.resign(this.myColor);
+      this.saveRoomSnapshot();
       if (this.mode === 'online' && this.network.connected) {
         this.network.send({ type: 'RESIGN', color: this.myColor });
       }
@@ -182,11 +187,12 @@ class FogChessApp {
     const triggerRematch = () => {
       const nextColor = oppositeColor(this.myColor);
       this.resetMatch(nextColor);
+      this.saveRoomSnapshot();
       if (this.mode === 'online' && this.network.connected) {
         this.network.send({
-          type: 'START_MATCH',
+          type: 'NEW_REMATCH',
           yourColor: oppositeColor(nextColor),
-          initialItems: this.game.getItemBoxCoordsList(),
+          state: this.game.serializeState(),
         });
       }
       this.showToast('New match started! Colors swapped.', 'success');
@@ -194,6 +200,36 @@ class FogChessApp {
 
     this.rematchBtn.addEventListener('click', triggerRematch);
     this.bannerRematchBtn.addEventListener('click', triggerRematch);
+  }
+
+  saveRoomSnapshot() {
+    if (this.mode !== 'online' || !this.network.roomCode) return;
+    try {
+      const payload = {
+        roomCode: this.network.roomCode,
+        myColor: this.myColor,
+        state: this.game.serializeState(),
+      };
+      sessionStorage.setItem(`fogchess_room_${this.network.roomCode}`, JSON.stringify(payload));
+    } catch (_) {}
+  }
+
+  loadRoomSnapshot(code) {
+    if (!code) return null;
+    try {
+      const raw = sessionStorage.getItem(`fogchess_room_${code.toUpperCase()}`);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  clearRoomSnapshot(code) {
+    if (!code) return;
+    try {
+      sessionStorage.removeItem(`fogchess_room_${code.toUpperCase()}`);
+    } catch (_) {}
   }
 
   checkURLRoomParam() {
@@ -214,7 +250,7 @@ class FogChessApp {
 
   startHostingRoom(code) {
     this.mode = 'online';
-    this.hasReceivedStartMatch = false;
+    this.hasSyncedInitialState = false;
     this.fogPeekDebug = false;
     this.peekFogBtn.classList.add('hidden');
 
@@ -235,18 +271,32 @@ class FogChessApp {
     window.history.replaceState({}, '', url.toString());
 
     this.network.hostRoom(code);
+    this.saveRoomSnapshot();
   }
 
   startJoiningRoom(code) {
     this.mode = 'online';
-    this.hasReceivedStartMatch = false;
+    this.hasSyncedInitialState = false;
     this.fogPeekDebug = false;
     this.peekFogBtn.classList.add('hidden');
+
+    // If this tab was previously in this room (e.g. accidental page reload), restore its snapshot first!
+    const snapshot = this.loadRoomSnapshot(code);
+    if (snapshot && snapshot.state) {
+      this.game.loadState(snapshot.state);
+      this.myColor = snapshot.myColor || COLORS.WHITE;
+      this.boardFlipped = this.myColor === COLORS.BLACK;
+      this.renderAll();
+    }
 
     this.lobbySetupPanel.classList.add('hidden');
     this.activeRoomPanel.classList.remove('hidden');
     this.roomCodeBadge.textContent = code;
     this.openSecondTabBtn.classList.add('hidden');
+
+    const url = new URL(window.location.href);
+    url.searchParams.set('room', code);
+    window.history.replaceState({}, '', url.toString());
 
     this.network.joinRoom(code);
   }
@@ -273,55 +323,117 @@ class FogChessApp {
     this.connectionText.textContent = text;
   }
 
-  handlePeerConnected() {
-    if (this.network.isHost) {
-      this.showToast('Opponent connected to room!', 'success');
-      const guestColor = oppositeColor(this.myColor);
-      this.resetMatch(this.myColor);
+  /**
+   * When a peer connects/reconnects, DO NOT wipe an existing match!
+   * Instead, synchronize the current board & powerup state (`SYNC_MATCH_STATE`).
+   */
+  handlePeerConnected({ isResponder } = {}) {
+    if (isResponder) {
+      this.showToast('Opponent connected — syncing live match state!', 'success');
       this.network.send({
-        type: 'START_MATCH',
-        yourColor: guestColor,
-        initialItems: this.game.getItemBoxCoordsList(),
+        type: 'SYNC_MATCH_STATE',
+        yourColor: oppositeColor(this.myColor),
+        state: this.game.serializeState(),
       });
     } else {
+      // Joining / rejoining client announces readiness and shares its history count in case
+      // the other player is the one who lost state.
       this.network.send({
-        type: 'GUEST_READY',
+        type: 'PEER_JOINED_READY',
+        historyLength: this.game.history.length,
+        myColor: this.myColor,
+        state: this.game.isMatchInProgress() ? this.game.serializeState() : null,
       });
     }
   }
 
   handlePeerDisconnected() {
-    this.showToast('Opponent disconnected from the room.', 'error');
+    this.showToast('Opponent disconnected. Their game state is preserved if they rejoin!', 'error');
   }
 
   handleNetworkMessage(data) {
     if (!data || !data.type) return;
 
     switch (data.type) {
-      case 'GUEST_READY': {
-        if (this.network.isHost && this.game.history.length === 0) {
+      case 'PEER_JOINED_READY': {
+        // If the joining player actually has a further-progressed match state than ours
+        // (e.g. if our tab refreshed and lost state), adopt their state!
+        if (
+          data.state &&
+          (data.historyLength || 0) > this.game.history.length
+        ) {
+          this.game.loadState(data.state);
+          this.myColor = oppositeColor(data.myColor || COLORS.WHITE);
+          this.boardFlipped = this.myColor === COLORS.BLACK;
+          this.saveRoomSnapshot();
+          this.renderAll();
+          this.showToast('Restored in-progress match state from opponent!', 'success');
+        } else {
+          // Send our authoritative match state (whether at turn 1 or turn 30) to the joining player
           this.network.send({
-            type: 'START_MATCH',
+            type: 'SYNC_MATCH_STATE',
             yourColor: oppositeColor(this.myColor),
-            initialItems: this.game.getItemBoxCoordsList(),
+            state: this.game.serializeState(),
           });
         }
         break;
       }
 
-      case 'START_MATCH': {
-        const alreadyStartedSameColor =
-          this.game.history.length === 0 &&
-          this.myColor === data.yourColor &&
-          this.hasReceivedStartMatch;
-        this.hasReceivedStartMatch = true;
-        this.resetMatch(data.yourColor, data.initialItems || null);
-        if (!alreadyStartedSameColor) {
-          this.showToast(
-            `Match started! You are playing as ${data.yourColor === COLORS.WHITE ? 'White' : 'Black'}.`,
-            'success'
-          );
+      case 'SYNC_MATCH_STATE': {
+        if (!data.state) break;
+        const incomingLen = data.state.history?.length || 0;
+        const myLen = this.game.history.length;
+
+        // If we somehow have more moves than the incoming sync, push our state back instead of overwriting!
+        if (myLen > incomingLen) {
+          this.network.send({
+            type: 'SYNC_MATCH_STATE',
+            yourColor: oppositeColor(this.myColor),
+            state: this.game.serializeState(),
+          });
+          break;
         }
+
+        this.game.loadState(data.state);
+        this.myColor = data.yourColor || COLORS.BLACK;
+        this.boardFlipped = this.myColor === COLORS.BLACK;
+        this.selectedSquare = null;
+        this.legalMovesForSelected = [];
+        this.targetingState = null;
+        this.saveRoomSnapshot();
+        this.renderAll();
+
+        if (!this.hasSyncedInitialState) {
+          this.hasSyncedInitialState = true;
+          const colorLabel = this.myColor === COLORS.WHITE ? 'White' : 'Black';
+          const statusMsg =
+            incomingLen > 0
+              ? `Rejoined in-progress match as ${colorLabel} (Move ${this.game.fullMoveNumber})!`
+              : `Connected! You are playing as ${colorLabel}.`;
+          this.showToast(statusMsg, 'success');
+        }
+        break;
+      }
+
+      case 'NEW_REMATCH': {
+        if (data.state) {
+          this.game.loadState(data.state);
+        } else {
+          this.game.reset();
+        }
+        this.myColor = data.yourColor;
+        this.boardFlipped = this.myColor === COLORS.BLACK;
+        this.selectedSquare = null;
+        this.legalMovesForSelected = [];
+        this.targetingState = null;
+        this.promotionModal.classList.add('hidden');
+        this.gameOverBanner.classList.add('hidden');
+        this.saveRoomSnapshot();
+        this.renderAll();
+        this.showToast(
+          `Rematch started! You are playing as ${this.myColor === COLORS.WHITE ? 'White' : 'Black'}.`,
+          'success'
+        );
         break;
       }
 
@@ -333,6 +445,7 @@ class FogChessApp {
         }
         this.selectedSquare = null;
         this.legalMovesForSelected = [];
+        this.saveRoomSnapshot();
         this.renderAll();
         break;
       }
@@ -347,12 +460,14 @@ class FogChessApp {
         }
         this.selectedSquare = null;
         this.legalMovesForSelected = [];
+        this.saveRoomSnapshot();
         this.renderAll();
         break;
       }
 
       case 'RESIGN': {
         this.game.resign(data.color);
+        this.saveRoomSnapshot();
         this.renderAll();
         this.showToast('Opponent resigned!', 'success');
         break;
@@ -370,14 +485,15 @@ class FogChessApp {
 
   /**
    * Called when player clicks "Use" on a powerup slot in their inventory.
+   * Players can use up to 2 powerups on a single turn!
    */
   initiatePowerupSlot(slotIndex) {
     if (!this.isMyTurn()) {
       this.showToast('Wait for your turn to activate a powerup!', 'info');
       return;
     }
-    if (this.game.usedPowerupThisTurn) {
-      this.showToast('You already used a powerup this turn! Now make your move.', 'info');
+    if (this.game.powerupsUsedThisTurn >= MAX_INVENTORY_SLOTS) {
+      this.showToast('You have already used 2 powerups this turn! Now make your move.', 'info');
       return;
     }
 
@@ -389,13 +505,11 @@ class FogChessApp {
     this.legalMovesForSelected = [];
 
     if (def.targetType === 'none') {
-      // Immediate activation (e.g. Fog Cloud)
-      const duration = Math.floor(Math.random() * 3) + 1; // 1 to 3 turns
+      const duration = Math.floor(Math.random() * 3) + 1;
       this.commitPowerupUse(slotIndex, powerupId, { duration });
       return;
     }
 
-    // Enter board targeting mode
     this.targetingState = {
       slotIndex,
       powerupId,
@@ -413,6 +527,7 @@ class FogChessApp {
     }
 
     this.targetingState = null;
+    this.saveRoomSnapshot();
 
     if (this.mode === 'online' && this.network.connected) {
       this.network.send({
@@ -428,9 +543,6 @@ class FogChessApp {
     return true;
   }
 
-  /**
-   * Checks if square (r, c) is a valid target while in powerup targeting mode.
-   */
   isValidPowerupTarget(r, c, visibleSquares) {
     if (!this.targetingState) return false;
     const def = POWERUP_DEFS[this.targetingState.powerupId];
@@ -499,7 +611,7 @@ class FogChessApp {
 
     if (!this.isMyTurn()) return;
 
-    // 1. If currently in Powerup Targeting mode:
+    // 1. Powerup Targeting mode:
     if (this.targetingState) {
       const visibleSquares = this.game.getVisibleSquares(this.myColor);
       if (!this.isValidPowerupTarget(r, c, visibleSquares)) {
@@ -543,7 +655,6 @@ class FogChessApp {
       return;
     }
 
-    // Select own piece
     const clickedPiece = this.game.board[r][c];
     if (clickedPiece && clickedPiece.color === this.myColor) {
       if (this.game.isFrozen(r, c)) {
@@ -597,6 +708,7 @@ class FogChessApp {
     this.selectedSquare = null;
     this.legalMovesForSelected = [];
     this.targetingState = null;
+    this.saveRoomSnapshot();
 
     if (moveRecord.pickedUpBox) {
       if (moveRecord.grantedPowerup) {
@@ -625,18 +737,13 @@ class FogChessApp {
     }
   }
 
-  /**
-   * Tactical Powerup Bot: collects '?' boxes and activates powerups before moving!
-   */
   scheduleBotMove() {
     const botColor = oppositeColor(this.myColor);
     setTimeout(() => {
       if (this.game.winner || this.game.turn !== botColor) return;
 
-      // 1. Bot considers using a held powerup before moving
       this.tryBotUsePowerup(botColor);
 
-      // 2. Bot selects best move (prioritizing King capture, high-value captures, and '?' Item Boxes!)
       const allMoves = this.game.getAllMoves(botColor);
       if (allMoves.length === 0) return;
 
@@ -652,7 +759,6 @@ class FogChessApp {
         if (target) {
           score += (pieceValues[target.type] || 1) * 14;
         }
-        // High incentive to grab a rainbow '?' box if bot has an open inventory slot!
         if (this.game.itemBoxes.has(toKey) && this.game.inventories[botColor].length < 2) {
           score += 18;
         }
@@ -678,9 +784,8 @@ class FogChessApp {
 
   tryBotUsePowerup(botColor) {
     const inv = this.game.inventories[botColor];
-    if (!inv || inv.length === 0 || this.game.usedPowerupThisTurn) return;
+    if (!inv || inv.length === 0 || this.game.powerupsUsedThisTurn >= MAX_INVENTORY_SLOTS) return;
 
-    // Use if holding 2 items, or 65% chance when holding 1 item
     if (inv.length < 2 && Math.random() > 0.65) return;
 
     const powerupId = inv[0];
@@ -705,7 +810,6 @@ class FogChessApp {
           }
         }
         if (candidates.length > 0) {
-          // Prefer freezing Queen/Rook/Knight
           const weights = { q: 9, r: 5, b: 3, n: 3, p: 1 };
           candidates.sort((a, b) => (weights[b[2]] || 1) - (weights[a[2]] || 1));
           const [r, c] = candidates[0];
@@ -787,9 +891,11 @@ class FogChessApp {
     const myInv = this.game.inventories[this.myColor] || [];
     const oppColor = oppositeColor(this.myColor);
     const oppInv = this.game.inventories[oppColor] || [];
-    const canActivateNow = this.isMyTurn() && !this.game.usedPowerupThisTurn && !this.game.winner;
+    const canActivateNow =
+      this.isMyTurn() &&
+      this.game.powerupsUsedThisTurn < MAX_INVENTORY_SLOTS &&
+      !this.game.winner;
 
-    // Render my 2 slots
     let mySlotsHTML = '';
     for (let i = 0; i < 2; i++) {
       const powerupId = myInv[i];
@@ -833,7 +939,6 @@ class FogChessApp {
       });
     });
 
-    // Render opponent's 2 mystery slots (never reveals which powerup they hold!)
     let oppSlotsHTML = '';
     for (let i = 0; i < 2; i++) {
       const hasItem = Boolean(oppInv[i]);
@@ -845,14 +950,13 @@ class FogChessApp {
     }
     this.oppInventoryEl.innerHTML = oppSlotsHTML;
 
-    // Render targeting banner if active
     if (this.targetingState) {
       const def = POWERUP_DEFS[this.targetingState.powerupId];
       let prompt = `${def.icon} ${def.name}: `;
       if (def.targetType === 'empty_square') {
         prompt += 'Click any highlighted empty square to drop a Stone Wall.';
       } else if (def.targetType === 'friendly_non_king') {
-        prompt += `Click one of your highlighted non-King pieces.`;
+        prompt += 'Click one of your highlighted non-King pieces.';
       } else if (def.targetType === 'enemy_non_king') {
         prompt += 'Click a highlighted enemy non-King piece to freeze.';
       } else if (def.targetType === 'two_friendly_non_king') {
@@ -874,6 +978,9 @@ class FogChessApp {
     const amIFogged = this.game.isPlayerFogged(this.myColor);
     const oppColor = oppositeColor(this.myColor);
     const isOppFogged = this.game.isPlayerFogged(oppColor);
+
+    const whiteInCheck = this.game.isKingInCheck(COLORS.WHITE);
+    const blackInCheck = this.game.isKingInCheck(COLORS.BLACK);
 
     if (amIFogged) {
       const t = this.game.fogTurns[this.myColor];
@@ -918,7 +1025,6 @@ class FogChessApp {
           sqEl.classList.add('sq-visible');
         }
 
-        // Selected square highlight
         if (
           this.selectedSquare &&
           this.selectedSquare[0] === r &&
@@ -927,7 +1033,6 @@ class FogChessApp {
           sqEl.classList.add('sq-selected');
         }
 
-        // Swap step-1 selected piece highlight
         if (
           this.targetingState?.firstSquare &&
           this.targetingState.firstSquare[0] === r &&
@@ -936,7 +1041,6 @@ class FogChessApp {
           sqEl.classList.add('sq-selected');
         }
 
-        // Last move highlight
         if (lastMove && (isVisible || revealAll)) {
           if (
             (lastMove.from[0] === r && lastMove.from[1] === c) ||
@@ -971,6 +1075,16 @@ class FogChessApp {
           const pieceWrapper = document.createElement('div');
           pieceWrapper.className = 'piece-container';
 
+          // Highlight King in Check!
+          const isThisKingInCheck =
+            piece.type === PIECES.KING &&
+            ((piece.color === COLORS.WHITE && whiteInCheck) ||
+              (piece.color === COLORS.BLACK && blackInCheck));
+
+          if (isThisKingInCheck) {
+            sqEl.classList.add('sq-in-check');
+          }
+
           if (this.game.isShielded(r, c)) {
             pieceWrapper.classList.add('piece-shielded');
             sqEl.classList.add('sq-has-shield');
@@ -986,8 +1100,8 @@ class FogChessApp {
           pieceWrapper.innerHTML = getPieceSVG(piece.type, piece.color);
           sqEl.appendChild(pieceWrapper);
 
-          // Status badge icons on piece corner
           const badges = [];
+          if (isThisKingInCheck) badges.push('⚠️');
           if (this.game.isShielded(r, c)) badges.push('⭐');
           if (this.game.isFrozen(r, c)) badges.push('❄️');
           if (this.game.hasFeather(r, c)) badges.push('🪶');
@@ -1030,8 +1144,26 @@ class FogChessApp {
 
   renderHUD() {
     const myColorName = this.myColor === COLORS.WHITE ? 'White' : 'Black';
+    const oppColor = oppositeColor(this.myColor);
+    const oppColorName = oppColor === COLORS.WHITE ? 'White' : 'Black';
+
     this.myRoleBadge.textContent = `Playing as ${myColorName}`;
     this.myRoleBadge.className = `role-badge role-${this.myColor}`;
+
+    const amIInCheck = this.game.isKingInCheck(this.myColor);
+    const isOppInCheck = this.game.isKingInCheck(oppColor);
+
+    if (this.checkAlertBadge) {
+      if (amIInCheck) {
+        this.checkAlertBadge.textContent = '⚠️ YOUR KING IS IN CHECK!';
+        this.checkAlertBadge.className = 'check-badge check-danger';
+      } else if (isOppInCheck) {
+        this.checkAlertBadge.textContent = `⚔️ ${oppColorName} King in Check`;
+        this.checkAlertBadge.className = 'check-badge check-opp';
+      } else {
+        this.checkAlertBadge.className = 'check-badge hidden';
+      }
+    }
 
     if (this.game.winner) {
       const winnerName = this.game.winner === COLORS.WHITE ? 'White' : 'Black';
@@ -1054,14 +1186,16 @@ class FogChessApp {
     }
 
     if (this.game.turn === this.myColor) {
-      const canPowerup =
-        this.game.inventories[this.myColor].length > 0 && !this.game.usedPowerupThisTurn;
-      const hint = canPowerup ? ' — You may use 1 Powerup before moving!' : '';
-      this.turnBanner.textContent = `Your Turn (${myColorName})${hint}`;
-      this.turnBanner.className = 'turn-banner banner-my-turn';
+      const remainingPowerupUses = MAX_INVENTORY_SLOTS - this.game.powerupsUsedThisTurn;
+      const heldCount = this.game.inventories[this.myColor].length;
+      const canPowerup = heldCount > 0 && remainingPowerupUses > 0;
+      const checkPrefix = amIInCheck ? '⚠️ CHECK! — ' : '';
+      const hint = canPowerup ? ` — You can use ${ heldCount === 2 && remainingPowerupUses === 2 ? 'up to 2 Powerups' : 'a Powerup' } before moving!` : '';
+      this.turnBanner.textContent = `${checkPrefix}Your Turn (${myColorName})${hint}`;
+      this.turnBanner.className = `turn-banner ${amIInCheck ? 'banner-in-check' : 'banner-my-turn'}`;
     } else {
-      const oppName = this.myColor === COLORS.WHITE ? 'Black' : 'White';
-      this.turnBanner.textContent = `Opponent's Turn (${oppName})`;
+      const checkPrefix = amIInCheck ? '⚠️ Your King is in Check! — ' : isOppInCheck ? `⚔️ ${oppColorName} is in Check — ` : '';
+      this.turnBanner.textContent = `${checkPrefix}Opponent's Turn (${oppColorName})`;
       this.turnBanner.className = 'turn-banner banner-opp-turn';
     }
   }
