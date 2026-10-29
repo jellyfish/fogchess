@@ -3,21 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FogChess — Multiplayer Fog of War Chess</title>
-  <link rel="stylesheet" href="css/styles.css?v=3" />
+  <title>FogChess — Powerup Edition (Mario Kart Chess)</title>
+  <link rel="stylesheet" href="css/styles.css?v=4" />
   <!-- MQTT over Secure WebSockets (WSS) for instant, NAT-proof multiplayer rooms on GitHub Pages -->
   <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-  <script type="module" src="js/app.js?v=3"></script>
+  <script type="module" src="js/app.js?v=4"></script>
 </head>
 <body>
   <div class="app-shell">
     <!-- Top Header -->
     <header class="top-header">
       <div class="brand">
-        <div class="brand-logo" aria-hidden="true">🌫️</div>
+        <div class="brand-logo" aria-hidden="true">🎁</div>
         <div>
-          <h1>FogChess</h1>
-          <p class="brand-tagline">Tactical Chess in the Fog of War</p>
+          <h1>FogChess <span class="edition-pill">Powerup Edition</span></h1>
+          <p class="brand-tagline">Chess meets Mario Kart — Grab Rainbow ? Boxes &amp; Unleash Powerups</p>
         </div>
       </div>
 
@@ -26,7 +26,7 @@
           <span class="status-dot"></span>
           <span id="connection-text">Not in a room</span>
         </div>
-        <button id="btn-practice-bot" class="btn btn-secondary btn-sm" title="Play against a local bot that obeys Fog of War">
+        <button id="btn-practice-bot" class="btn btn-secondary btn-sm" title="Play against a local bot that collects and uses powerups">
           Practice vs. Bot
         </button>
       </div>
@@ -34,7 +34,7 @@
 
     <!-- Main Content Grid -->
     <main class="main-grid">
-      <!-- Left Column: Multiplayer Room & Rules -->
+      <!-- Left Column: Multiplayer Room & Powerup Guide -->
       <aside class="panel left-panel">
         <section class="card">
           <h2 class="card-title">Multiplayer Room</h2>
@@ -104,32 +104,59 @@
           </div>
         </section>
 
-        <!-- Fog Rules & Assumptions Card -->
+        <!-- Powerup Catalog Card -->
         <section class="card rules-card">
-          <h2 class="card-title">Fog of War Rules</h2>
-          <ul class="rules-list">
+          <h2 class="card-title">Mystery [?] Powerups</h2>
+          <p class="card-desc">
+            Land on rainbow <strong>?</strong> squares to collect up to <strong>2 powerups</strong>. Use 1 powerup per turn as a free bonus action before moving!
+          </p>
+          <ul class="powerup-guide-list">
             <li>
-              <strong>Full Piece Sight:</strong> You only see squares occupied by your pieces and squares your pieces can currently reach or attack.
+              <span class="pg-icon">🌫️</span>
+              <div>
+                <strong>Fog Cloud:</strong> Blinds your opponent with Fog of War for 1–3 turns (you still see the full board).
+              </div>
             </li>
             <li>
-              <strong>Pawn Sight:</strong> Pawns always illuminate their <strong>two forward-diagonal squares</strong> (even when empty) plus 1 square straight ahead (and 2 squares ahead from their starting rank if unblocked).
+              <span class="pg-icon">🧱</span>
+              <div>
+                <strong>Stone Wall:</strong> Drop an impassable barrier on any empty square for 2 rounds. Knights can jump it.
+              </div>
             </li>
             <li>
-              <strong>Line of Sight:</strong> Rooks, Bishops, and Queens illuminate rays up to and including the first blocking piece, and cannot see behind blockers.
+              <span class="pg-icon">⭐</span>
+              <div>
+                <strong>Star Shield:</strong> Make one of your non-King pieces invincible from capture for 1 round.
+              </div>
             </li>
             <li>
-              <strong>Capture the King:</strong> There is <em>no check or checkmate</em>. Moving into an attacked square is legal. Win by capturing the enemy King!
+              <span class="pg-icon">❄️</span>
+              <div>
+                <strong>Ice Freeze:</strong> Freeze one enemy non-King piece so it cannot move on their next turn.
+              </div>
+            </li>
+            <li>
+              <span class="pg-icon">🪶</span>
+              <div>
+                <strong>Feather Jump:</strong> One friendly non-King piece can also jump like a Knight this turn.
+              </div>
+            </li>
+            <li>
+              <span class="pg-icon">🔄</span>
+              <div>
+                <strong>Position Swap:</strong> Instantly swap the board squares of any two friendly non-King pieces.
+              </div>
             </li>
           </ul>
         </section>
       </aside>
 
-      <!-- Center Column: The Chessboard -->
+      <!-- Center Column: The Chessboard & Powerup Dock -->
       <section class="board-stage">
         <div class="hud-top-bar">
           <div class="hud-badges">
             <span id="my-role-badge" class="role-badge role-w">Playing as White</span>
-            <span id="visible-count-badge" class="sight-badge">32 / 64 squares visible</span>
+            <span id="visible-count-badge" class="sight-badge">Full Board Vision • 2/3 ? Boxes on board</span>
           </div>
           <div class="board-actions">
             <button id="btn-peek-fog" class="btn btn-secondary btn-xs hidden" title="Toggle fog visibility in Practice Mode">
@@ -145,16 +172,22 @@
           Create or join a room (or click Practice vs. Bot) to begin
         </div>
 
+        <!-- Interactive Targeting Bar when activating a targeted powerup -->
+        <div id="targeting-banner" class="targeting-banner hidden">
+          <span id="targeting-text">Select a target square on the board...</span>
+          <button id="btn-cancel-targeting" class="btn btn-danger-outline btn-xs">Cancel</button>
+        </div>
+
         <div class="board-outer-frame">
           <div id="rank-labels" class="rank-labels"></div>
           <div class="board-inner-wrap">
-            <div id="chessboard" class="chessboard" role="grid" aria-label="Fog of War Chessboard"></div>
+            <div id="chessboard" class="chessboard" role="grid" aria-label="Powerup Chessboard"></div>
 
             <!-- Game Over Overlay Banner -->
             <div id="game-over-banner" class="game-over-overlay hidden">
               <div class="game-over-card">
                 <h3 id="game-over-title">Victory!</h3>
-                <p id="game-over-subtitle">King captured. The fog has been lifted.</p>
+                <p id="game-over-subtitle">King captured.</p>
                 <button id="btn-banner-rematch" class="btn btn-primary">
                   Play Rematch (Swap Colors)
                 </button>
@@ -165,8 +198,20 @@
         <div id="file-labels" class="file-labels"></div>
       </section>
 
-      <!-- Right Column: Captures, Move Log & Match Controls -->
+      <!-- Right Column: Powerup Inventory, Captures & Move Log -->
       <aside class="panel right-panel">
+        <!-- Player & Opponent Powerup Inventory Card -->
+        <section class="card inventory-card">
+          <div class="card-header-inline">
+            <h2 class="card-title">Your Powerups (Max 2)</h2>
+            <div class="opp-inv-wrap" title="Opponent's held mystery powerups">
+              <span class="opp-inv-label">Foe:</span>
+              <div id="opp-inventory-slots" class="opp-slots-row"></div>
+            </div>
+          </div>
+          <div id="my-inventory-slots" class="my-inventory-stack"></div>
+        </section>
+
         <section class="card">
           <h2 class="card-title">Captured Pieces</h2>
           <div class="captures-box">
@@ -183,8 +228,8 @@
 
         <section class="card move-log-card">
           <div class="card-header-inline">
-            <h2 class="card-title">Intel Move Log</h2>
-            <span class="intel-tag">Fog-Filtered</span>
+            <h2 class="card-title">Match Move Log</h2>
+            <span class="intel-tag">Capture King</span>
           </div>
           <div id="move-list" class="move-list"></div>
           <div class="match-controls">
