@@ -56,6 +56,7 @@ export const POWERUP_DEFS = {
     name: 'Fog Cloud',
     icon: '🌫️',
     shortDesc: 'Blind opponent with Fog of War for 1–3 turns',
+    exemptText: 'Exempt: Opponent’s own pieces & their direct sight rays remain visible',
     fullDesc: 'Inflicts Fog of War on your opponent for 1–3 of their turns (they only see what their pieces see, while you see the full board).',
     targetType: 'none',
   },
@@ -64,39 +65,44 @@ export const POWERUP_DEFS = {
     name: 'Stone Wall',
     icon: '🧱',
     shortDesc: 'Place an impassable wall on an empty square (2 rounds)',
-    fullDesc: 'Drop a stone barrier on any empty square for 2 full rounds (4 turns). Blocks movement and sliding rays; Knights & Ghosts can pass.',
+    exemptText: 'Exempt from blockage: Knights, Feather-jumping pieces & Ghost Phase pieces',
+    fullDesc: 'Drop a stone barrier on any empty square for 2 full rounds (4 turns). Blocks normal movement and sliding rays; Knights, Feather Jump & Ghost Phase pieces are exempt and can pass.',
     targetType: 'empty_square',
   },
   shield: {
     id: 'shield',
     name: 'Star Shield',
     icon: '⭐',
-    shortDesc: 'Make 1 friendly non-King piece invincible for 1 round',
-    fullDesc: 'Grants one of your non-King pieces temporary immunity from capture through your opponent’s next turn.',
+    shortDesc: 'Make 1 friendly piece invincible for 1 round',
+    exemptText: 'Exempt: King (cannot be applied to the King)',
+    fullDesc: 'Grants one of your pieces temporary immunity from capture through your opponent’s next turn. Exempt: King.',
     targetType: 'friendly_non_king',
   },
   freeze: {
     id: 'freeze',
     name: 'Ice Freeze',
     icon: '❄️',
-    shortDesc: 'Freeze 1 enemy non-King piece for their next turn',
-    fullDesc: 'Encases a visible enemy non-King piece in ice so it cannot move or attack on their upcoming turn.',
+    shortDesc: 'Freeze 1 enemy piece for their next turn',
+    exemptText: 'Exempt: Enemy King (cannot freeze a King)',
+    fullDesc: 'Encases a visible enemy piece in ice so it cannot move or attack on their upcoming turn. Exempt: Enemy King.',
     targetType: 'enemy_non_king',
   },
   feather: {
     id: 'feather',
     name: 'Feather Jump',
     icon: '🪶',
-    shortDesc: '1 friendly non-King piece can move like a Knight this turn',
-    fullDesc: 'Gives one of your non-King pieces the ability to jump like a Knight (in addition to its normal moves) for this turn.',
+    shortDesc: '1 friendly piece can jump like a Knight this turn',
+    exemptText: 'Exempt: King, Knights & Frozen pieces',
+    fullDesc: 'Gives one of your pieces the ability to jump like a Knight (in addition to its normal moves) for this turn. Exempt: King, Knights & Frozen pieces.',
     targetType: 'friendly_non_king',
   },
   swap: {
     id: 'swap',
     name: 'Position Swap',
     icon: '🔄',
-    shortDesc: 'Swap positions of 2 friendly non-King pieces',
-    fullDesc: 'Instantly swaps the board positions of any two of your non-King pieces before you make your normal move.',
+    shortDesc: 'Swap positions of 2 friendly pieces',
+    exemptText: 'Exempt: King (and Pawns cannot swap onto the promotion rank)',
+    fullDesc: 'Instantly swaps the board positions of any two of your pieces before you make your normal move. Exempt: King, and Pawns cannot be swapped onto the promotion rank.',
     targetType: 'two_friendly_non_king',
   },
   resurrect: {
@@ -104,7 +110,8 @@ export const POWERUP_DEFS = {
     name: 'Resurrect',
     icon: '⚱️',
     shortDesc: 'Revive a lost piece onto your home back row',
-    fullDesc: 'Choose one of your captured pieces and return it to any empty square on your lowest (home) row.',
+    exemptText: 'Exempt: King (revives captured pieces onto an empty home-row square)',
+    fullDesc: 'Choose one of your captured pieces and return it to any empty square on your lowest (home) row. Exempt: King.',
     targetType: 'home_row_empty',
   },
   panic: {
@@ -112,6 +119,7 @@ export const POWERUP_DEFS = {
     name: 'Panic!',
     icon: '🚨',
     shortDesc: 'Opponent only gets 10s to move (playable on their turn too!)',
+    exemptText: 'Exempt: None (if in Check under Checkmate rules, auto-plays a legal move)',
     fullDesc: 'Puts a 10-second shot clock on your opponent’s turn! Can be activated on your turn OR during your opponent’s turn. If time runs out, they forfeit their move.',
     targetType: 'none',
     usableOnOpponentTurn: true,
@@ -120,8 +128,9 @@ export const POWERUP_DEFS = {
     id: 'refuge',
     name: 'Refuge',
     icon: '🌀',
-    shortDesc: 'Piece can step off-board onto the outer Refuge ring',
-    fullDesc: 'Allows a friendly non-King piece to move 1 square off the edge of the board into the outer Refuge ring (or capture an enemy piece hiding in Refuge).',
+    shortDesc: 'Piece can move onto the outer Refuge ring',
+    exemptText: 'Exempt: King & Frozen pieces (King cannot enter Refuge)',
+    fullDesc: 'Allows a friendly piece to move off the board onto the outer Refuge border ring using its natural movement pattern. Exempt: King & Frozen pieces.',
     targetType: 'friendly_non_king',
   },
   armor: {
@@ -129,23 +138,26 @@ export const POWERUP_DEFS = {
     name: 'Pawn Armor',
     icon: '🛡️',
     shortDesc: 'Give a Pawn a persistent 2nd life against capture',
-    fullDesc: 'Equips a friendly Pawn with persistent Armor. An enemy attack destroys the armor instead of the Pawn, and the attacker stays on its starting square!',
+    exemptText: 'Exempt: King, Queen, Rook, Bishop & Knight (Pawns only)',
+    fullDesc: 'Equips a friendly Pawn with persistent Armor. An enemy attack destroys the armor instead of the Pawn, and the attacker stays on its starting square! Exempt: All non-Pawn pieces.',
     targetType: 'friendly_pawn',
   },
   ghost: {
     id: 'ghost',
     name: 'Ghost Phase',
     icon: '👻',
-    shortDesc: 'Phase through at most 1 piece this turn (cannot capture King via passthrough)',
-    fullDesc: 'For this turn, the chosen friendly non-King piece can phase through at most 1 piece when moving or capturing. A King cannot be captured as a result of a passthrough.',
+    shortDesc: 'Phase through at most 1 piece/wall this turn',
+    exemptText: 'Exempt: King (cannot apply to King or capture enemy King via passthrough)',
+    fullDesc: 'For this turn, the chosen friendly piece can phase through at most 1 piece or wall when moving/capturing. Exempt: Cannot be applied to the King, and an enemy King cannot be captured via passthrough.',
     targetType: 'friendly_non_king',
   },
   transform: {
     id: 'transform',
     name: 'Wheel of Fortune',
     icon: '🎰',
-    shortDesc: 'Randomly promote/demote a friendly non-King piece',
-    fullDesc: 'Spins the Wheel of Fortune on a friendly non-King piece, transforming it into a different piece (10% Pawn, 30% Bishop, 30% Knight, 20% Rook, 10% Queen).',
+    shortDesc: 'Randomly promote/demote a friendly piece',
+    exemptText: 'Exempt: King (cannot target a King or transform into a King)',
+    fullDesc: 'Spins the Wheel of Fortune on a friendly piece, transforming it into a different piece (10% Pawn, 30% Bishop, 30% Knight, 20% Rook, 10% Queen). Exempt: King.',
     targetType: 'friendly_non_king',
   },
 };
@@ -193,20 +205,107 @@ export function oppositeColor(color) {
   return color === COLORS.WHITE ? COLORS.BLACK : COLORS.WHITE;
 }
 
-export function randomPowerupId() {
-  return POWERUP_IDS[Math.floor(Math.random() * POWERUP_IDS.length)];
+export const SPAWN_RATE_PRESETS = {
+  none: {
+    id: 'none',
+    label: 'None (No Replenish)',
+    minHalfTurns: 9999,
+    maxHalfTurns: 9999,
+  },
+  low: {
+    id: 'low',
+    label: 'Slow (4–7 turns)',
+    minHalfTurns: 8,
+    maxHalfTurns: 14,
+  },
+  normal: {
+    id: 'normal',
+    label: 'Normal (1.5–3 turns)',
+    minHalfTurns: 3,
+    maxHalfTurns: 6,
+  },
+  high: {
+    id: 'high',
+    label: 'Fast (1–2 turns)',
+    minHalfTurns: 2,
+    maxHalfTurns: 4,
+  },
+  chaotic: {
+    id: 'chaotic',
+    label: 'Chaotic (Every turn)',
+    minHalfTurns: 1,
+    maxHalfTurns: 2,
+  },
+};
+
+export const DEFAULT_MATCH_SETTINGS = {
+  spawnRate: 'normal', // 'none' | 'low' | 'normal' | 'high' | 'chaotic'
+  maxBoardItems: MAX_BOARD_ITEMS, // 0..6 (default 3)
+  enabledPowerups: [...POWERUP_IDS], // Subset of POWERUP_IDS
+  timerMinutes: 0, // 0 (off) | 5 | 10 | 20 | 30
+  winRule: 'checkmate', // 'checkmate' | 'capture_king'
+};
+
+export function normalizeMatchSettings(raw = {}) {
+  const spawnRate =
+    raw && typeof raw.spawnRate === 'string' && SPAWN_RATE_PRESETS[raw.spawnRate]
+      ? raw.spawnRate
+      : DEFAULT_MATCH_SETTINGS.spawnRate;
+
+  const parsedMaxItems = Number(raw?.maxBoardItems);
+  const maxBoardItems =
+    Number.isInteger(parsedMaxItems) && parsedMaxItems >= 0 && parsedMaxItems <= 6
+      ? parsedMaxItems
+      : DEFAULT_MATCH_SETTINGS.maxBoardItems;
+
+  const enabledPowerups = Array.isArray(raw?.enabledPowerups)
+    ? raw.enabledPowerups.filter((id) => POWERUP_IDS.includes(id))
+    : [...DEFAULT_MATCH_SETTINGS.enabledPowerups];
+
+  const validTimers = [0, 5, 10, 20, 30];
+  const parsedTimer = Number(raw?.timerMinutes);
+  const timerMinutes = validTimers.includes(parsedTimer) ? parsedTimer : 0;
+
+  const winRule =
+    raw?.winRule === 'capture_king' ? 'capture_king' : 'checkmate';
+
+  return {
+    spawnRate,
+    maxBoardItems,
+    enabledPowerups,
+    timerMinutes,
+    winRule,
+  };
 }
 
-export function rollReplenishDelayHalfTurns() {
-  return Math.floor(Math.random() * 4) + 3; // 3 to 6 half-turns (1.5 to 3 full turns)
+export function randomPowerupId(enabledList = POWERUP_IDS) {
+  const pool =
+    Array.isArray(enabledList) && enabledList.length > 0
+      ? enabledList
+      : [];
+  if (pool.length === 0) return null;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+export function rollReplenishDelayHalfTurns(spawnRate = 'normal') {
+  const preset = SPAWN_RATE_PRESETS[spawnRate] || SPAWN_RATE_PRESETS.normal;
+  const span = preset.maxHalfTurns - preset.minHalfTurns + 1;
+  return preset.minHalfTurns + Math.floor(Math.random() * span);
 }
 
 export class FogChessGame {
-  constructor(initialItemCoords = null) {
-    this.reset(initialItemCoords);
+  constructor(initialItemCoords = null, settings = null) {
+    this.settings = normalizeMatchSettings(settings || DEFAULT_MATCH_SETTINGS);
+    this.reset(initialItemCoords, settings);
   }
 
-  reset(initialItemCoords = null) {
+  reset(initialItemCoords = null, settings = null) {
+    if (settings) {
+      this.settings = normalizeMatchSettings(settings);
+    } else if (!this.settings) {
+      this.settings = normalizeMatchSettings(DEFAULT_MATCH_SETTINGS);
+    }
+
     this.board = this.createInitialBoard();
     this.turn = COLORS.WHITE;
     this.castlingRights = {
@@ -221,13 +320,19 @@ export class FogChessGame {
     this.winner = null;
     this.winReason = null;
 
+    const initialClockMs = (this.settings.timerMinutes || 0) * 60 * 1000;
+    this.timeRemainingMs = {
+      w: initialClockMs,
+      b: initialClockMs,
+    };
+
     this.itemBoxes = new Set();
     this.inventories = {
       w: [],
       b: [],
     };
     this.powerupsUsedThisTurn = 0;
-    this.turnsUntilNextSpawn = rollReplenishDelayHalfTurns();
+    this.turnsUntilNextSpawn = this.rollSpawnDelay();
 
     // Active effects:
     this.fogTurns = { w: 0, b: 0 };
@@ -250,18 +355,44 @@ export class FogChessGame {
     }
   }
 
+  getMaxBoardItems() {
+    if (!this.settings || this.settings.enabledPowerups.length === 0) return 0;
+    return typeof this.settings.maxBoardItems === 'number'
+      ? this.settings.maxBoardItems
+      : MAX_BOARD_ITEMS;
+  }
+
+  rollSpawnDelay() {
+    return rollReplenishDelayHalfTurns(this.settings?.spawnRate || 'normal');
+  }
+
+  rollRandomEnabledPowerup() {
+    return randomPowerupId(this.settings?.enabledPowerups || POWERUP_IDS);
+  }
+
   /**
-   * Spawns exactly 2 initial powerup boxes at game start:
+   * Spawns initial powerup boxes at game start:
    * - 1 on the Black half (rows 2..3, random unoccupied square)
    * - 1 on the White half (rows 4..5, random unoccupied square)
    */
   spawnInitialSymmetricItemBoxes() {
+    const maxItems = this.getMaxBoardItems();
+    if (maxItems <= 0) return;
+    if (maxItems === 1) {
+      this.spawnRandomItemBox(2, 5);
+      return;
+    }
     this.spawnRandomItemBox(2, 3);
     this.spawnRandomItemBox(4, 5);
   }
 
   serializeState() {
     return {
+      settings: {
+        ...this.settings,
+        enabledPowerups: [...this.settings.enabledPowerups],
+      },
+      timeRemainingMs: { ...this.timeRemainingMs },
       board: this.board.map((row) => row.map((cell) => (cell ? { ...cell } : null))),
       turn: this.turn,
       castlingRights: {
@@ -301,6 +432,13 @@ export class FogChessGame {
   loadState(state) {
     if (!state || !Array.isArray(state.board)) return false;
 
+    this.settings = normalizeMatchSettings(state.settings || this.settings);
+    const defaultClockMs = (this.settings.timerMinutes || 0) * 60 * 1000;
+    this.timeRemainingMs = {
+      w: typeof state.timeRemainingMs?.w === 'number' ? state.timeRemainingMs.w : defaultClockMs,
+      b: typeof state.timeRemainingMs?.b === 'number' ? state.timeRemainingMs.b : defaultClockMs,
+    };
+
     this.board = state.board.map((row) => row.map((cell) => (cell ? { ...cell } : null)));
     this.turn = state.turn || COLORS.WHITE;
     this.castlingRights = {
@@ -327,7 +465,7 @@ export class FogChessGame {
     this.turnsUntilNextSpawn =
       typeof state.turnsUntilNextSpawn === 'number'
         ? state.turnsUntilNextSpawn
-        : rollReplenishDelayHalfTurns();
+        : this.rollSpawnDelay();
 
     this.fogTurns = {
       w: state.fogTurns?.w || 0,
@@ -387,7 +525,8 @@ export class FogChessGame {
   }
 
   spawnRandomItemBox(minRow = 2, maxRow = 5) {
-    if (this.itemBoxes.size >= MAX_BOARD_ITEMS) return null;
+    const maxItems = this.getMaxBoardItems();
+    if (this.itemBoxes.size >= maxItems) return null;
 
     const candidates = [];
     for (let r = minRow; r <= maxRow; r++) {
@@ -805,15 +944,18 @@ export class FogChessGame {
       case 'feather': {
         const sq = params.square;
         if (!sq || !inBounds(sq[0], sq[1])) {
-          return { ok: false, reason: 'Select one of your non-King pieces.' };
+          return { ok: false, reason: 'Select one of your non-King, non-Knight pieces.' };
         }
         const [r, c] = sq;
         const piece = this.board[r][c];
         if (!piece || piece.color !== color || piece.type === PIECES.KING) {
-          return { ok: false, reason: 'Feather Jump can only target your own non-King piece.' };
+          return { ok: false, reason: 'Feather Jump cannot be applied to the King (King is exempt).' };
+        }
+        if (piece.type === PIECES.KNIGHT) {
+          return { ok: false, reason: 'Knights already jump in an L-shape and are exempt from Feather Jump.' };
         }
         if (this.isFrozen(r, c)) {
-          return { ok: false, reason: 'That piece is frozen and cannot jump this turn.' };
+          return { ok: false, reason: 'That piece is frozen and cannot use Feather Jump this turn.' };
         }
         this.featherSquares.add(`${r},${c}`);
         return {
@@ -852,7 +994,7 @@ export class FogChessGame {
         this.board[r1][c1] = p2;
         this.board[r2][c2] = p1;
 
-        if (!wasInCheck && this.isKingInCheck(color)) {
+        if (this.settings.winRule === 'checkmate' && !wasInCheck && this.isKingInCheck(color)) {
           this.board[r1][c1] = p1;
           this.board[r2][c2] = p2;
           return { ok: false, reason: 'Cannot swap pieces if it exposes your King to Check!' };
@@ -1010,7 +1152,7 @@ export class FogChessGame {
         const wasInCheck = this.isKingInCheck(color);
         this.board[r][c] = { type: newType, color };
 
-        if (!wasInCheck && this.isKingInCheck(color)) {
+        if (this.settings.winRule === 'checkmate' && !wasInCheck && this.isKingInCheck(color)) {
           this.board[r][c] = { type: oldType, color };
           return { ok: false, reason: 'Cannot transform that piece right now as it would expose your King to Check!' };
         }
@@ -1463,6 +1605,9 @@ export class FogChessGame {
     if (!piece || piece.color !== this.turn) return [];
 
     const pseudoMoves = this.getPseudoMovesFrom(r, c, false);
+    if (this.settings.winRule === 'capture_king') {
+      return pseudoMoves;
+    }
     return pseudoMoves.filter((m) => !this.wouldMoveLeaveKingInCheck(m, piece.color));
   }
 
@@ -1475,8 +1620,9 @@ export class FogChessGame {
     const rights = this.castlingRights[color];
     if (!rights) return moves;
 
+    const ignoreCheck = skipCheckValidation || this.settings.winRule === 'capture_king';
     const enemyColor = oppositeColor(color);
-    if (!skipCheckValidation && this.isSquareAttackedBy(homeRank, 4, enemyColor)) {
+    if (!ignoreCheck && this.isSquareAttackedBy(homeRank, 4, enemyColor)) {
       return moves;
     }
 
@@ -1491,7 +1637,7 @@ export class FogChessGame {
       this.board[homeRank][7]?.color === color
     ) {
       const transitSafe =
-        skipCheckValidation ||
+        ignoreCheck ||
         (!this.isSquareAttackedBy(homeRank, 5, enemyColor) &&
           !this.isSquareAttackedBy(homeRank, 6, enemyColor));
       if (transitSafe) {
@@ -1516,7 +1662,7 @@ export class FogChessGame {
       this.board[homeRank][0]?.color === color
     ) {
       const transitSafe =
-        skipCheckValidation ||
+        ignoreCheck ||
         (!this.isSquareAttackedBy(homeRank, 3, enemyColor) &&
           !this.isSquareAttackedBy(homeRank, 2, enemyColor));
       if (transitSafe) {
@@ -1562,9 +1708,21 @@ export class FogChessGame {
 
   checkEndOfGameCondition() {
     if (this.winner) return;
+
+    if (!this.findKingSquare(COLORS.WHITE)) {
+      this.winner = COLORS.BLACK;
+      this.winReason = 'King captured';
+      return;
+    }
+    if (!this.findKingSquare(COLORS.BLACK)) {
+      this.winner = COLORS.WHITE;
+      this.winReason = 'King captured';
+      return;
+    }
+
     const legalMoves = this.getAllMoves(this.turn);
     if (legalMoves.length === 0 && !this.hasPotentialRescuePowerup(this.turn)) {
-      if (this.isKingInCheck(this.turn)) {
+      if (this.settings.winRule === 'checkmate' && this.isKingInCheck(this.turn)) {
         this.winner = oppositeColor(this.turn);
         this.winReason = 'Checkmate';
       } else {
@@ -1575,14 +1733,24 @@ export class FogChessGame {
   }
 
   /**
+   * Ends the match when a player's chess clock reaches 0:00.
+   */
+  timeoutByClock(color) {
+    if (this.winner) return;
+    this.timeRemainingMs[color] = 0;
+    this.winner = oppositeColor(color);
+    this.winReason = 'Time Out';
+  }
+
+  /**
    * Forfeits/skips the current player's turn when their 10-second Panic timer expires!
    */
   skipTurnByPanicTimeout() {
     if (this.winner) return null;
     const timedOutColor = this.turn;
 
-    // If the timed-out player is in Check, auto-play a random legal move so King safety stays valid!
-    if (this.isKingInCheck(timedOutColor)) {
+    // If the timed-out player is in Check (in Checkmate mode), auto-play a random legal move so King safety stays valid!
+    if (this.settings.winRule === 'checkmate' && this.isKingInCheck(timedOutColor)) {
       const legal = this.getAllMoves(timedOutColor);
       if (legal.length > 0) {
         const chosen = legal[Math.floor(Math.random() * legal.length)];
@@ -1803,7 +1971,8 @@ export class FogChessGame {
     }
 
     // Check if destination square had a Rainbow '?' Item Box
-    const wasAtMaxBoxesBeforeMove = this.itemBoxes.size >= MAX_BOARD_ITEMS;
+    const maxBoxes = this.getMaxBoardItems();
+    const wasAtMaxBoxesBeforeMove = this.itemBoxes.size >= maxBoxes;
     let pickedUpBox = false;
     let grantedPowerup = null;
     let inventoryWasFull = false;
@@ -1812,13 +1981,18 @@ export class FogChessGame {
       pickedUpBox = true;
       this.itemBoxes.delete(toKey);
       if (this.inventories[moverColor].length < MAX_INVENTORY_SLOTS) {
-        grantedPowerup = options.awardedPowerup || randomPowerupId();
-        this.inventories[moverColor].push(grantedPowerup);
+        grantedPowerup =
+          'awardedPowerup' in options
+            ? options.awardedPowerup
+            : this.rollRandomEnabledPowerup();
+        if (grantedPowerup) {
+          this.inventories[moverColor].push(grantedPowerup);
+        }
       } else {
         inventoryWasFull = true;
       }
       if (wasAtMaxBoxesBeforeMove || this.turnsUntilNextSpawn <= 2) {
-        this.turnsUntilNextSpawn = rollReplenishDelayHalfTurns();
+        this.turnsUntilNextSpawn = this.rollSpawnDelay();
       }
     }
 
@@ -1885,25 +2059,25 @@ export class FogChessGame {
     this.refugeReadySquares.clear();
     this.powerupsUsedThisTurn = 0;
 
+    const maxBoxes = this.getMaxBoardItems();
+    const canReplenish = this.settings?.spawnRate !== 'none' && maxBoxes > 0;
     let spawnedItem = null;
     if ('spawnedItem' in options) {
       if (options.spawnedItem) {
         const [sr, sc] = options.spawnedItem;
-        if (this.itemBoxes.size < MAX_BOARD_ITEMS) {
+        if (this.itemBoxes.size < maxBoxes) {
           this.itemBoxes.add(`${sr},${sc}`);
           spawnedItem = [sr, sc];
         }
-        this.turnsUntilNextSpawn = rollReplenishDelayHalfTurns();
-      } else if (this.itemBoxes.size < MAX_BOARD_ITEMS && !pickedUpBox) {
+        this.turnsUntilNextSpawn = this.rollSpawnDelay();
+      } else if (canReplenish && this.itemBoxes.size < maxBoxes && !pickedUpBox) {
         this.turnsUntilNextSpawn = Math.max(1, this.turnsUntilNextSpawn - 1);
       }
-    } else {
-      if (this.itemBoxes.size < MAX_BOARD_ITEMS && !pickedUpBox) {
-        this.turnsUntilNextSpawn--;
-        if (this.turnsUntilNextSpawn <= 0) {
-          spawnedItem = this.spawnRandomItemBox();
-          this.turnsUntilNextSpawn = rollReplenishDelayHalfTurns();
-        }
+    } else if (canReplenish && this.itemBoxes.size < maxBoxes && !pickedUpBox) {
+      this.turnsUntilNextSpawn--;
+      if (this.turnsUntilNextSpawn <= 0) {
+        spawnedItem = this.spawnRandomItemBox();
+        this.turnsUntilNextSpawn = this.rollSpawnDelay();
       }
     }
     this.lastSpawnedItem = spawnedItem;

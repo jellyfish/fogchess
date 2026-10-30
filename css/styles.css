@@ -328,6 +328,145 @@ body {
   padding: 0 10px;
 }
 
+/* Match Setup Settings Box */
+.match-settings-box {
+  margin-top: 12px;
+  padding: 10px 11px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.settings-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.settings-header-row .field-label {
+  margin-bottom: 0;
+}
+
+.settings-hint {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+}
+
+.settings-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.field-sub-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.input-select-sm {
+  padding: 6px 8px;
+  font-size: 0.8rem;
+}
+
+.powerup-opt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.opt-quick-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.btn-link-xs {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-link-xs:hover {
+  text-decoration: underline;
+}
+
+.powerup-toggles-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+
+.powerup-toggle-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.12);
+  color: var(--text-primary);
+  transition: all 0.14s ease;
+  user-select: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.powerup-toggle-chip.chip-off {
+  border-color: var(--border-subtle);
+  background: rgba(15, 23, 42, 0.45);
+  color: var(--text-secondary);
+  opacity: 0.52;
+  text-decoration: line-through;
+}
+
+.active-room-rules {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.73rem;
+  color: var(--text-secondary);
+}
+
+.setup-rules-summary {
+  margin-top: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.setup-rules-summary:hover {
+  border-color: var(--accent-primary);
+}
+
+.rule-pill {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-card-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 /* Active Room Box */
 .active-room-box {
   display: flex;
@@ -382,6 +521,13 @@ body {
 .pg-icon {
   font-size: 1.05rem;
   line-height: 1.2;
+}
+
+.pg-exempt {
+  display: inline-block;
+  color: #fbbf24;
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .powerup-guide-list strong {
@@ -514,6 +660,69 @@ body {
   background: rgba(244, 63, 94, 0.22);
   color: #fecdd3;
   border-color: #f43f5e;
+}
+
+/* Match Chess Clocks Bar */
+.chess-clock-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.clock-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  transition: all 0.18s ease;
+}
+
+.clock-pill.clock-active {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);
+}
+
+.clock-pill.clock-low {
+  background: rgba(244, 63, 94, 0.2);
+  border-color: #f43f5e;
+  color: #ffe4e6;
+}
+
+.clock-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+.clock-dot-w {
+  background: #f8fafc;
+  border: 1px solid #94a3b8;
+}
+
+.clock-dot-b {
+  background: #0f172a;
+  border: 1px solid #94a3b8;
+}
+
+.clock-label {
+  flex: 1;
+  font-weight: 600;
+}
+
+.clock-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.02rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
 }
 
 /* Targeting & Panic Banners */
@@ -1001,6 +1210,14 @@ body {
   line-height: 1.3;
 }
 
+.slot-exempt {
+  margin-top: 2px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #fbbf24;
+  line-height: 1.25;
+}
+
 /* Game Over Overlay */
 .game-over-overlay {
   position: absolute;
@@ -1181,6 +1398,62 @@ body {
 .promo-choice-btn svg {
   width: 42px;
   height: 42px;
+}
+
+/* Match Setup Settings Modal */
+.settings-modal-card {
+  width: min(460px, 92vw);
+  text-align: left;
+  padding: 20px 22px;
+}
+
+.modal-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.modal-header-row h3 {
+  margin: 0 0 3px 0;
+  font-size: 1.05rem;
+}
+
+.modal-header-row .modal-subtitle {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.modal-close-icon {
+  background: var(--bg-card-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.modal-close-icon:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
+}
+
+.modal-settings-body {
+  margin-top: 0;
+  padding: 12px;
+  gap: 12px;
+}
+
+.modal-footer-row {
+  margin-top: 14px;
 }
 
 /* Toast Notification */

@@ -4,10 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FogChess — Powerup Edition (Mario Kart Chess)</title>
-  <link rel="stylesheet" href="css/styles.css?v=9" />
+  <link rel="stylesheet" href="css/styles.css?v=14" />
   <!-- MQTT over Secure WebSockets (WSS) for instant, NAT-proof multiplayer rooms on GitHub Pages -->
   <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-  <script type="module" src="js/app.js?v=9"></script>
+  <script type="module" src="js/app.js?v=14"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -26,6 +26,9 @@
           <span class="status-dot"></span>
           <span id="connection-text">Not in a room</span>
         </div>
+        <button id="btn-header-settings" class="btn btn-secondary btn-sm" title="Configure Match Setup Settings">
+          ⚙️ Match Settings
+        </button>
         <button id="btn-practice-bot" class="btn btn-secondary btn-sm" title="Play against a local bot that collects and uses powerups">
           Practice vs. Bot
         </button>
@@ -37,7 +40,12 @@
       <!-- Left Column: Multiplayer Room & Powerup Guide -->
       <aside class="panel left-panel">
         <section class="card">
-          <h2 class="card-title">Multiplayer Room</h2>
+          <div class="card-header-inline">
+            <h2 class="card-title">Multiplayer Room</h2>
+            <button id="btn-open-settings" class="btn btn-secondary btn-xs" title="Configure Match Setup Settings">
+              ⚙️ Settings
+            </button>
+          </div>
           <p class="card-desc">
             Real-time WebSocket rooms — works through any firewall/NAT right from GitHub Pages.
           </p>
@@ -57,6 +65,8 @@
                 </button>
               </div>
             </div>
+
+            <div id="setup-rules-summary" class="active-room-rules setup-rules-summary" title="Click ⚙️ Settings to customize match rules"></div>
 
             <div class="divider"><span>OR JOIN EXISTING</span></div>
 
@@ -84,6 +94,8 @@
               <span class="room-code-label">ROOM CODE</span>
               <strong id="room-code-display" class="room-code-value">------</strong>
             </div>
+
+            <div id="active-room-rules" class="active-room-rules"></div>
 
             <div class="button-grid-2">
               <button id="btn-copy-code" class="btn btn-secondary btn-sm">
@@ -113,51 +125,51 @@
           <ul class="powerup-guide-list">
             <li>
               <span class="pg-icon">🌫️</span>
-              <div><strong>Fog Cloud:</strong> Blind opponent with Fog of War for 1–3 turns (faded pieces show what's hidden).</div>
+              <div><strong>Fog Cloud:</strong> Blind opponent with Fog of War for 1–3 turns (faded pieces show what's hidden). <span class="pg-exempt">(Exempt: Opponent's own pieces &amp; their direct sight rays)</span></div>
             </li>
             <li>
               <span class="pg-icon">🧱</span>
-              <div><strong>Stone Wall:</strong> Impassable barrier on an empty square for 2 rounds.</div>
+              <div><strong>Stone Wall:</strong> Impassable barrier on an empty square for 2 rounds. <span class="pg-exempt">(Exempt from blockage: Knights, Feather Jump &amp; Ghost Phase pieces)</span></div>
             </li>
             <li>
               <span class="pg-icon">⭐</span>
-              <div><strong>Star Shield:</strong> Make 1 friendly non-King piece invincible for 1 round.</div>
+              <div><strong>Star Shield:</strong> Make 1 friendly piece invincible for 1 round. <span class="pg-exempt">(Exempt: King)</span></div>
             </li>
             <li>
               <span class="pg-icon">❄️</span>
-              <div><strong>Ice Freeze:</strong> Freeze 1 enemy non-King piece for their next turn.</div>
+              <div><strong>Ice Freeze:</strong> Freeze 1 visible enemy piece for their next turn. <span class="pg-exempt">(Exempt: Enemy King)</span></div>
             </li>
             <li>
               <span class="pg-icon">🪶</span>
-              <div><strong>Feather Jump:</strong> 1 friendly non-King piece can jump like a Knight this turn.</div>
+              <div><strong>Feather Jump:</strong> 1 friendly piece can jump like a Knight this turn. <span class="pg-exempt">(Exempt: King, Knights &amp; Frozen pieces)</span></div>
             </li>
             <li>
               <span class="pg-icon">🔄</span>
-              <div><strong>Position Swap:</strong> Swap positions of any 2 friendly non-King pieces.</div>
+              <div><strong>Position Swap:</strong> Swap positions of any 2 friendly pieces. <span class="pg-exempt">(Exempt: King, and Pawns cannot swap onto promotion rank)</span></div>
             </li>
             <li>
               <span class="pg-icon">⚱️</span>
-              <div><strong>Resurrect:</strong> Revive a lost piece onto an empty square on your lowest (home) row.</div>
+              <div><strong>Resurrect:</strong> Revive a lost piece onto an empty square on your lowest (home) row. <span class="pg-exempt">(Exempt: King)</span></div>
             </li>
             <li>
               <span class="pg-icon">🚨</span>
-              <div><strong>Panic!:</strong> Opponent only gets 10 seconds to make their move (playable even on opponent's turn!).</div>
+              <div><strong>Panic!:</strong> Opponent only gets 10 seconds to make their move (playable even on opponent's turn!). <span class="pg-exempt">(Exempt: If in Check under Checkmate rules, auto-plays a legal move)</span></div>
             </li>
             <li>
               <span class="pg-icon">🌀</span>
-              <div><strong>Refuge:</strong> Friendly non-King piece can move onto (and return from) the outer Refuge border ring using its natural movement pattern.</div>
+              <div><strong>Refuge:</strong> Friendly piece can move onto (and return from) the outer Refuge border ring using its natural movement pattern. <span class="pg-exempt">(Exempt: King &amp; Frozen pieces)</span></div>
             </li>
             <li>
               <span class="pg-icon">🛡️</span>
-              <div><strong>Pawn Armor:</strong> Persistent 2nd life for a Pawn (attack breaks armor; attacker stays put).</div>
+              <div><strong>Pawn Armor:</strong> Persistent 2nd life for a Pawn (attack breaks armor; attacker stays put). <span class="pg-exempt">(Exempt: King, Queen, Rook, Bishop &amp; Knight — Pawns only)</span></div>
             </li>
             <li>
               <span class="pg-icon">👻</span>
-              <div><strong>Ghost Phase:</strong> Piece can phase through at most 1 piece when moving/capturing this turn (cannot capture a King via passthrough).</div>
+              <div><strong>Ghost Phase:</strong> Piece can phase through at most 1 piece/wall when moving/capturing this turn. <span class="pg-exempt">(Exempt: King — cannot apply to King or capture enemy King via passthrough)</span></div>
             </li>
             <li>
               <span class="pg-icon">🎰</span>
-              <div><strong>Wheel of Fortune:</strong> Spin to transform a friendly non-King piece (10% P, 30% B, 30% N, 20% R, 10% Q).</div>
+              <div><strong>Wheel of Fortune:</strong> Spin to transform a friendly piece (10% P, 30% B, 30% N, 20% R, 10% Q). <span class="pg-exempt">(Exempt: King)</span></div>
             </li>
           </ul>
         </section>
@@ -183,6 +195,20 @@
 
         <div id="turn-banner" class="turn-banner banner-waiting">
           Create or join a room (or click Practice vs. Bot) to begin
+        </div>
+
+        <!-- Match Chess Clocks Bar (Shown when Chess Clock is enabled in settings) -->
+        <div id="chess-clock-bar" class="chess-clock-bar hidden">
+          <div id="clock-pill-w" class="clock-pill">
+            <span class="clock-dot clock-dot-w"></span>
+            <span class="clock-label">White</span>
+            <strong id="clock-time-w" class="clock-time">10:00</strong>
+          </div>
+          <div id="clock-pill-b" class="clock-pill">
+            <span class="clock-dot clock-dot-b"></span>
+            <span class="clock-label">Black</span>
+            <strong id="clock-time-b" class="clock-time">10:00</strong>
+          </div>
         </div>
 
         <!-- 10-Second Panic Shot Clock Banner -->
@@ -265,6 +291,86 @@
       <h3 id="promotion-modal-title">Promote Pawn</h3>
       <p id="promotion-modal-desc">Choose a piece to promote your pawn to:</p>
       <div id="promotion-choices" class="promotion-grid"></div>
+    </div>
+  </div>
+
+  <!-- Match Setup Settings Modal -->
+  <div id="settings-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <div class="modal-card settings-modal-card">
+      <div class="modal-header-row">
+        <div>
+          <h3 id="settings-modal-title">⚙️ Match Setup Settings</h3>
+          <p class="modal-subtitle">Configure rules for new Multiplayer Rooms &amp; Practice vs. Bot matches.</p>
+        </div>
+        <button type="button" id="btn-close-settings-top" class="modal-close-icon" aria-label="Close Settings">✕</button>
+      </div>
+
+      <div class="match-settings-box modal-settings-body">
+        <div class="settings-grid-2">
+          <div>
+            <label for="select-spawn-rate" class="field-sub-label">Ability Spawn Rate</label>
+            <select id="select-spawn-rate" class="input-select input-select-sm" autocomplete="off">
+              <option value="low">Slow (4–7 turns)</option>
+              <option value="normal" selected>Normal (1.5–3 turns)</option>
+              <option value="high">Fast (1–2 turns)</option>
+              <option value="chaotic">Chaotic (Every turn)</option>
+              <option value="none">None (No Replenish)</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="select-max-board-items" class="field-sub-label">Max Powerups on Board</label>
+            <select id="select-max-board-items" class="input-select input-select-sm" autocomplete="off">
+              <option value="3" selected>3 Boxes (Default)</option>
+              <option value="0">0 Boxes (None)</option>
+              <option value="1">1 Box</option>
+              <option value="2">2 Boxes</option>
+              <option value="4">4 Boxes</option>
+              <option value="5">5 Boxes</option>
+              <option value="6">6 Boxes</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-grid-2">
+          <div>
+            <label for="select-turn-timer" class="field-sub-label">Chess Clock</label>
+            <select id="select-turn-timer" class="input-select input-select-sm" autocomplete="off">
+              <option value="0" selected>Off</option>
+              <option value="5">5 Minutes</option>
+              <option value="10">10 Minutes</option>
+              <option value="20">20 Minutes</option>
+              <option value="30">30 Minutes</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="select-win-rule" class="field-sub-label">Victory Mode</label>
+            <select id="select-win-rule" class="input-select input-select-sm" autocomplete="off">
+              <option value="checkmate" selected>Standard Checkmate</option>
+              <option value="capture_king">Capture the King</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="powerup-opt-section">
+          <div class="settings-header-row">
+            <span class="field-sub-label">Opt In / Out Abilities (<span id="enabled-powerups-count">12/12</span>)</span>
+            <div class="opt-quick-btns">
+              <button type="button" id="btn-powerups-all" class="btn-link-xs">Select All</button>
+              <span>·</span>
+              <button type="button" id="btn-powerups-none" class="btn-link-xs">Deselect All</button>
+            </div>
+          </div>
+          <div id="powerup-toggles-grid" class="powerup-toggles-grid"></div>
+        </div>
+      </div>
+
+      <div class="modal-footer-row">
+        <button type="button" id="btn-done-settings" class="btn btn-primary btn-full">
+          Done
+        </button>
+      </div>
     </div>
   </div>
 

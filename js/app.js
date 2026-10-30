@@ -3,15 +3,17 @@ import {
   COLORS,
   PIECES,
   POWERUP_DEFS,
+  POWERUP_IDS,
+  SPAWN_RATE_PRESETS,
   MAX_INVENTORY_SLOTS,
   coordsToAlgebraic,
   oppositeColor,
   inBounds,
   inRefugeRing,
   rollTransformedPieceType,
-} from './chess.js?v=9';
-import { RoomNetwork, generateRoomCode } from './network.js?v=9';
-import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=9';
+} from './chess.js?v=14';
+import { RoomNetwork, generateRoomCode } from './network.js?v=14';
+import { getPieceSVG, PIECE_NAMES } from './pieces.js?v=14';
 
 class FogChessApp {
   constructor() {
@@ -39,6 +41,13 @@ class FogChessApp {
     this.panicDeadline = null;
     this.panicTurnKey = null;
 
+    // Match Chess Clock state
+    this.matchClockInterval = null;
+    this.lastClockTickMs = null;
+
+    // Selected powerups in Match Setup Settings
+    this.setupEnabledPowerups = new Set(POWERUP_IDS);
+
     this.network = new RoomNetwork({
       onStatusChange: (state, text) => this.handleNetworkStatus(state, text),
       onPeerConnected: (info) => this.handlePeerConnected(info),
@@ -48,6 +57,7 @@ class FogChessApp {
     });
 
     this.cacheDOM();
+    this.syncSetupInputsFromGameSettings();
     this.bindEvents();
     this.checkURLRoomParam();
     this.renderAll();
@@ -141,7 +151,22 @@ class FogChessApp {
     this.joinRoomBtn = document.getElementById('btn-join-room');
     this.roomCodeInput = document.getElementById('input-room-code');
     this.hostColorSelect = document.getElementById('select-host-color');
+    this.spawnRateSelect = document.getElementById('select-spawn-rate');
+    this.maxBoardItemsSelect = document.getElementById('select-max-board-items');
+    this.turnTimerSelect = document.getElementById('select-turn-timer');
+    this.winRuleSelect = document.getElementById('select-win-rule');
+    this.powerupTogglesGridEl = document.getElementById('powerup-toggles-grid');
+    this.enabledPowerupsCountEl = document.getElementById('enabled-powerups-count');
+    this.powerupsAllBtn = document.getElementById('btn-powerups-all');
+    this.powerupsNoneBtn = document.getElementById('btn-powerups-none');
     this.activeRoomPanel = document.getElementById('active-room-panel');
+    this.activeRoomRulesEl = document.getElementById('active-room-rules');
+    this.setupRulesSummaryEl = document.getElementById('setup-rules-summary');
+    this.openSettingsBtn = document.getElementById('btn-open-settings');
+    this.headerSettingsBtn = document.getElementById('btn-header-settings');
+    this.settingsModal = document.getElementById('settings-modal');
+    this.closeSettingsTopBtn = document.getElementById('btn-close-settings-top');
+    this.doneSettingsBtn = document.getElementById('btn-done-settings');
     this.lobbySetupPanel = document.getElementById('lobby-setup-panel');
     this.roomCodeBadge = document.getElementById('room-code-display');
     this.copyLinkBtn = document.getElementById('btn-copy-link');
@@ -154,6 +179,11 @@ class FogChessApp {
     this.connectionBadge = document.getElementById('connection-badge');
     this.connectionText = document.getElementById('connection-text');
     this.turnBanner = document.getElementById('turn-banner');
+    this.chessClockBarEl = document.getElementById('chess-clock-bar');
+    this.clockPillW = document.getElementById('clock-pill-w');
+    this.clockPillB = document.getElementById('clock-pill-b');
+    this.clockTimeW = document.getElementById('clock-time-w');
+    this.clockTimeB = document.getElementById('clock-time-b');
     this.panicBannerEl = document.getElementById('panic-banner');
     this.panicTimerTextEl = document.getElementById('panic-timer-text');
     this.myRoleBadge = document.getElementById('my-role-badge');
@@ -188,7 +218,164 @@ class FogChessApp {
     this.toastEl = document.getElementById('toast-notification');
   }
 
+  renderPowerupSetupToggles() {
+    if (!this.powerupTogglesGridEl) return;
+    const shortLabels = {
+      fog: 'Fog',
+      wall: 'Wall',
+      shield: 'Shield',
+      freeze: 'Freeze',
+      feather: 'Feather',
+      swap: 'Swap',
+      resurrect: 'Revive',
+      panic: 'Panic',
+      refuge: 'Refuge',
+      armor: 'Armor',
+      ghost: 'Ghost',
+      transform: 'Wheel',
+    };
+
+    this.powerupTogglesGridEl.innerHTML = POWERUP_IDS.map((id) => {
+      const def = POWERUP_DEFS[id];
+      const enabled = this.setupEnabledPowerups.has(id);
+      return `
+        <button
+          type="button"
+          class="powerup-toggle-chip ${enabled ? '' : 'chip-off'}"
+          data-powerup-id="${id}"
+          title="${def.name}: ${def.shortDesc} (${def.exemptText})"
+        >
+          <span>${def.icon}</span>
+          <span>${shortLabels[id] || def.name}</span>
+        </button>
+      `;
+    }).join('');
+
+    if (this.enabledPowerupsCountEl) {
+      this.enabledPowerupsCountEl.textContent = `${this.setupEnabledPowerups.size}/${POWERUP_IDS.length}`;
+    }
+
+    this.powerupTogglesGridEl.querySelectorAll('.powerup-toggle-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const id = chip.dataset.powerupId;
+        if (this.setupEnabledPowerups.has(id)) {
+          this.setupEnabledPowerups.delete(id);
+        } else {
+          this.setupEnabledPowerups.add(id);
+        }
+        this.renderPowerupSetupToggles();
+        this.applySetupSettingsIfIdleOrBot();
+      });
+    });
+  }
+
+  getSetupMatchSettings() {
+    const parsedMax = this.maxBoardItemsSelect
+      ? parseInt(this.maxBoardItemsSelect.value, 10)
+      : 3;
+    return {
+      spawnRate: this.spawnRateSelect ? this.spawnRateSelect.value : 'normal',
+      maxBoardItems: Number.isNaN(parsedMax) ? 3 : parsedMax,
+      timerMinutes: this.turnTimerSelect ? parseInt(this.turnTimerSelect.value, 10) || 0 : 0,
+      winRule: this.winRuleSelect ? this.winRuleSelect.value : 'checkmate',
+      enabledPowerups: Array.from(this.setupEnabledPowerups),
+    };
+  }
+
+  syncSetupInputsFromGameSettings() {
+    const s = this.game.settings;
+    if (!s) return;
+    if (this.spawnRateSelect) this.spawnRateSelect.value = s.spawnRate || 'normal';
+    if (this.maxBoardItemsSelect) {
+      this.maxBoardItemsSelect.value = String(
+        typeof s.maxBoardItems === 'number' ? s.maxBoardItems : 3
+      );
+    }
+    if (this.turnTimerSelect) this.turnTimerSelect.value = String(s.timerMinutes || 0);
+    if (this.winRuleSelect) this.winRuleSelect.value = s.winRule || 'checkmate';
+    this.setupEnabledPowerups = new Set(s.enabledPowerups || POWERUP_IDS);
+    this.renderPowerupSetupToggles();
+  }
+
+  applySetupSettingsIfIdleOrBot() {
+    if (this.mode === 'online' && this.network.roomCode) return;
+    if (!this.game.isMatchInProgress()) {
+      this.resetMatch(this.myColor, null, this.getSetupMatchSettings());
+    } else {
+      this.game.settings = {
+        ...this.game.settings,
+        ...this.getSetupMatchSettings(),
+      };
+      this.renderAll();
+    }
+  }
+
+  openSettingsModal() {
+    if (!this.settingsModal) return;
+    this.settingsModal.classList.remove('hidden');
+  }
+
+  closeSettingsModal() {
+    if (!this.settingsModal) return;
+    this.settingsModal.classList.add('hidden');
+  }
+
   bindEvents() {
+    if (this.openSettingsBtn) {
+      this.openSettingsBtn.addEventListener('click', () => this.openSettingsModal());
+    }
+    if (this.headerSettingsBtn) {
+      this.headerSettingsBtn.addEventListener('click', () => this.openSettingsModal());
+    }
+    if (this.setupRulesSummaryEl) {
+      this.setupRulesSummaryEl.addEventListener('click', () => this.openSettingsModal());
+    }
+    if (this.closeSettingsTopBtn) {
+      this.closeSettingsTopBtn.addEventListener('click', () => this.closeSettingsModal());
+    }
+    if (this.doneSettingsBtn) {
+      this.doneSettingsBtn.addEventListener('click', () => this.closeSettingsModal());
+    }
+    if (this.settingsModal) {
+      this.settingsModal.addEventListener('click', (e) => {
+        if (e.target === this.settingsModal) {
+          this.closeSettingsModal();
+        }
+      });
+    }
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.settingsModal && !this.settingsModal.classList.contains('hidden')) {
+        this.closeSettingsModal();
+      }
+    });
+
+    if (this.spawnRateSelect) {
+      this.spawnRateSelect.addEventListener('change', () => this.applySetupSettingsIfIdleOrBot());
+    }
+    if (this.maxBoardItemsSelect) {
+      this.maxBoardItemsSelect.addEventListener('change', () => this.applySetupSettingsIfIdleOrBot());
+    }
+    if (this.turnTimerSelect) {
+      this.turnTimerSelect.addEventListener('change', () => this.applySetupSettingsIfIdleOrBot());
+    }
+    if (this.winRuleSelect) {
+      this.winRuleSelect.addEventListener('change', () => this.applySetupSettingsIfIdleOrBot());
+    }
+    if (this.powerupsAllBtn) {
+      this.powerupsAllBtn.addEventListener('click', () => {
+        this.setupEnabledPowerups = new Set(POWERUP_IDS);
+        this.renderPowerupSetupToggles();
+        this.applySetupSettingsIfIdleOrBot();
+      });
+    }
+    if (this.powerupsNoneBtn) {
+      this.powerupsNoneBtn.addEventListener('click', () => {
+        this.setupEnabledPowerups.clear();
+        this.renderPowerupSetupToggles();
+        this.applySetupSettingsIfIdleOrBot();
+      });
+    }
+
     this.createRoomBtn.addEventListener('click', () => {
       this.hostColorPref = this.hostColorSelect.value;
       const code = generateRoomCode();
@@ -234,22 +421,24 @@ class FogChessApp {
       this.network.cleanup(true);
       this.clearRoomSnapshot(oldCode);
       this.clearPanicCountdown();
+      this.clearMatchClock();
       this.activeRoomPanel.classList.add('hidden');
       this.lobbySetupPanel.classList.remove('hidden');
       window.history.replaceState({}, '', window.location.pathname);
       this.handleNetworkStatus('idle', 'Not in a room');
-      this.resetMatch(COLORS.WHITE);
+      this.resetMatch(COLORS.WHITE, null, this.getSetupMatchSettings());
     });
 
     this.practiceBotBtn.addEventListener('click', () => {
       this.network.cleanup(true);
       this.clearPanicCountdown();
+      this.clearMatchClock();
       this.mode = 'bot';
       this.activeRoomPanel.classList.add('hidden');
       this.lobbySetupPanel.classList.remove('hidden');
       this.peekFogBtn.classList.remove('hidden');
       this.handleNetworkStatus('bot', 'Practice vs. Powerup Bot');
-      this.resetMatch(COLORS.WHITE);
+      this.resetMatch(COLORS.WHITE, null, this.getSetupMatchSettings());
       this.showToast('Started Powerup Chess vs. Bot! Land on rainbow ? boxes to grab items.', 'success');
     });
 
@@ -284,7 +473,12 @@ class FogChessApp {
     const triggerRematch = () => {
       const nextColor = oppositeColor(this.myColor);
       this.clearPanicCountdown();
-      this.resetMatch(nextColor);
+      this.clearMatchClock();
+      const nextSettings =
+        this.mode === 'bot' || !this.network.roomCode
+          ? this.getSetupMatchSettings()
+          : this.game.settings;
+      this.resetMatch(nextColor, null, nextSettings);
       this.saveRoomSnapshot();
       if (this.mode === 'online' && this.network.connected) {
         this.network.send({
@@ -358,11 +552,12 @@ class FogChessApp {
       chosenColor = Math.random() < 0.5 ? COLORS.WHITE : COLORS.BLACK;
     }
 
-    this.resetMatch(chosenColor);
+    this.resetMatch(chosenColor, null, this.getSetupMatchSettings());
     this.lobbySetupPanel.classList.add('hidden');
     this.activeRoomPanel.classList.remove('hidden');
     this.roomCodeBadge.textContent = code;
     this.openSecondTabBtn.classList.remove('hidden');
+    this.renderActiveRoomRules();
 
     const url = new URL(window.location.href);
     url.searchParams.set('room', code);
@@ -398,9 +593,10 @@ class FogChessApp {
     this.network.joinRoom(code);
   }
 
-  resetMatch(myColor, initialItems = null) {
+  resetMatch(myColor, initialItems = null, settings = null) {
     this.clearPanicCountdown();
-    this.game.reset(initialItems);
+    this.clearMatchClock();
+    this.game.reset(initialItems, settings || this.game.settings);
     this.myColor = myColor;
     this.boardFlipped = myColor === COLORS.BLACK;
     this.selectedSquare = null;
@@ -413,6 +609,34 @@ class FogChessApp {
 
     if (this.mode === 'bot' && this.game.turn !== this.myColor) {
       this.scheduleBotMove();
+    }
+  }
+
+  renderActiveRoomRules() {
+    const s = this.game.settings;
+    if (!s) return;
+    const winLabel = s.winRule === 'capture_king' ? '👑 Capture King' : '♟️ Checkmate';
+    const clockLabel = s.timerMinutes > 0 ? `⏱️ ${s.timerMinutes}m Clock` : '⏱️ No Clock';
+    const spawnPreset = SPAWN_RATE_PRESETS[s.spawnRate] || SPAWN_RATE_PRESETS.normal;
+    const spawnLabel = `🎁 Rate: ${s.spawnRate.charAt(0).toUpperCase() + s.spawnRate.slice(1)}`;
+    const maxBoxes = typeof s.maxBoardItems === 'number' ? s.maxBoardItems : 3;
+    const maxBoxesLabel = `📦 Max ${maxBoxes}`;
+    const enabledCount = s.enabledPowerups?.length ?? POWERUP_IDS.length;
+    const abilitiesLabel = `✨ ${enabledCount}/${POWERUP_IDS.length} Abilities`;
+
+    const pillsHTML = `
+      <span class="rule-pill" title="Victory Rule">${winLabel}</span>
+      <span class="rule-pill" title="Chess Clock">${clockLabel}</span>
+      <span class="rule-pill" title="${spawnPreset.label}">${spawnLabel}</span>
+      <span class="rule-pill" title="Maximum Powerup Boxes on Board">${maxBoxesLabel}</span>
+      <span class="rule-pill" title="Enabled Powerups">${abilitiesLabel}</span>
+    `;
+
+    if (this.activeRoomRulesEl) {
+      this.activeRoomRulesEl.innerHTML = pillsHTML;
+    }
+    if (this.setupRulesSummaryEl) {
+      this.setupRulesSummaryEl.innerHTML = `${pillsHTML}<span class="rule-pill" title="Customize Match Settings">⚙️ Edit</span>`;
     }
   }
 
@@ -483,6 +707,7 @@ class FogChessApp {
         }
 
         this.game.loadState(data.state);
+        this.syncSetupInputsFromGameSettings();
         this.myColor = data.yourColor || COLORS.BLACK;
         this.boardFlipped = this.myColor === COLORS.BLACK;
         this.selectedSquare = null;
@@ -527,6 +752,9 @@ class FogChessApp {
       }
 
       case 'USE_POWERUP': {
+        if (data.timeRemainingMs) {
+          this.game.timeRemainingMs = { ...data.timeRemainingMs };
+        }
         const oppColor = oppositeColor(this.myColor);
         if (data.powerupId === 'transform' && data.params?.square) {
           const [tr, tc] = data.params.square;
@@ -555,6 +783,9 @@ class FogChessApp {
       }
 
       case 'MOVE': {
+        if (data.timeRemainingMs) {
+          this.game.timeRemainingMs = { ...data.timeRemainingMs };
+        }
         const moveRec = this.game.makeMove(data.from, data.to, data.promotionPiece, {
           awardedPowerup: data.awardedPowerup,
           spawnedItem: data.spawnedItem ?? null,
@@ -572,6 +803,9 @@ class FogChessApp {
       }
 
       case 'PANIC_TIMEOUT': {
+        if (data.timeRemainingMs) {
+          this.game.timeRemainingMs = { ...data.timeRemainingMs };
+        }
         this.clearPanicCountdown();
         this.game.skipTurnByPanicTimeout();
         this.saveRoomSnapshot();
@@ -580,8 +814,19 @@ class FogChessApp {
         break;
       }
 
+      case 'CLOCK_TIMEOUT': {
+        this.clearPanicCountdown();
+        this.clearMatchClock();
+        this.game.timeoutByClock(data.color);
+        this.saveRoomSnapshot();
+        this.renderAll();
+        this.showToast('⏱️ Chess clock expired!', 'info');
+        break;
+      }
+
       case 'RESIGN': {
         this.clearPanicCountdown();
+        this.clearMatchClock();
         this.game.resign(data.color);
         this.saveRoomSnapshot();
         this.renderAll();
@@ -661,6 +906,128 @@ class FogChessApp {
     if (this.panicBannerEl) {
       this.panicBannerEl.classList.add('hidden');
     }
+  }
+
+  /**
+   * Formats milliseconds into MM:SS (or M:SS.d when under 10 seconds).
+   */
+  formatClockMs(ms) {
+    const clamped = Math.max(0, ms || 0);
+    const totalSeconds = Math.floor(clamped / 1000);
+    const mins = Math.floor(totalSeconds / 60);
+    const secs = totalSeconds % 60;
+    const secsPadded = secs < 10 ? `0${secs}` : `${secs}`;
+    if (clamped < 10000 && clamped > 0) {
+      const tenths = Math.floor((clamped % 1000) / 100);
+      return `${mins}:${secsPadded}.${tenths}`;
+    }
+    return `${mins}:${secsPadded}`;
+  }
+
+  renderMatchClockUI() {
+    if (!this.chessClockBarEl) return;
+    const timerMins = this.game.settings?.timerMinutes || 0;
+    if (timerMins <= 0) {
+      this.chessClockBarEl.classList.add('hidden');
+      return;
+    }
+
+    this.chessClockBarEl.classList.remove('hidden');
+    const wMs = this.game.timeRemainingMs?.w ?? timerMins * 60000;
+    const bMs = this.game.timeRemainingMs?.b ?? timerMins * 60000;
+
+    if (this.clockTimeW) this.clockTimeW.textContent = this.formatClockMs(wMs);
+    if (this.clockTimeB) this.clockTimeB.textContent = this.formatClockMs(bMs);
+
+    const isRunning =
+      !this.game.winner &&
+      (this.mode === 'bot' || (this.mode === 'online' && this.network.connected));
+
+    if (this.clockPillW) {
+      this.clockPillW.classList.toggle('clock-active', isRunning && this.game.turn === COLORS.WHITE);
+      this.clockPillW.classList.toggle('clock-low', wMs > 0 && wMs <= 30000);
+    }
+    if (this.clockPillB) {
+      this.clockPillB.classList.toggle('clock-active', isRunning && this.game.turn === COLORS.BLACK);
+      this.clockPillB.classList.toggle('clock-low', bMs > 0 && bMs <= 30000);
+    }
+  }
+
+  syncMatchClock() {
+    const timerMins = this.game.settings?.timerMinutes || 0;
+    this.renderMatchClockUI();
+
+    if (timerMins <= 0 || this.game.winner) {
+      this.clearMatchClock();
+      return;
+    }
+
+    const canTick =
+      this.mode === 'bot' || (this.mode === 'online' && this.network.connected);
+    if (!canTick) {
+      this.clearMatchClock();
+      return;
+    }
+
+    if (this.matchClockInterval) {
+      this.lastClockTickMs = Date.now();
+      return;
+    }
+
+    this.lastClockTickMs = Date.now();
+    this.matchClockInterval = setInterval(() => {
+      if (this.game.winner || (this.game.settings?.timerMinutes || 0) <= 0) {
+        this.clearMatchClock();
+        return;
+      }
+      const now = Date.now();
+      const dt = Math.max(0, now - (this.lastClockTickMs || now));
+      this.lastClockTickMs = now;
+
+      const activeColor = this.game.turn;
+      this.game.timeRemainingMs[activeColor] = Math.max(
+        0,
+        (this.game.timeRemainingMs[activeColor] || 0) - dt
+      );
+      this.renderMatchClockUI();
+
+      if (this.game.timeRemainingMs[activeColor] <= 0) {
+        if (this.mode === 'bot' || activeColor === this.myColor) {
+          this.handleClockTimeout(activeColor);
+        }
+      }
+    }, 150);
+  }
+
+  clearMatchClock() {
+    if (this.matchClockInterval) {
+      clearInterval(this.matchClockInterval);
+      this.matchClockInterval = null;
+    }
+    this.lastClockTickMs = null;
+  }
+
+  handleClockTimeout(timedOutColor) {
+    if (this.game.winner) return;
+    this.clearPanicCountdown();
+    this.clearMatchClock();
+    this.selectedSquare = null;
+    this.legalMovesForSelected = [];
+    this.targetingState = null;
+
+    this.game.timeoutByClock(timedOutColor);
+    this.saveRoomSnapshot();
+
+    if (this.mode === 'online' && this.network.connected) {
+      this.network.send({
+        type: 'CLOCK_TIMEOUT',
+        color: timedOutColor,
+      });
+    }
+
+    const who = timedOutColor === COLORS.WHITE ? 'White' : 'Black';
+    this.showToast(`⏱️ ${who} ran out of time!`, 'error');
+    this.renderAll();
   }
 
   handleMyPanicTimeout() {
@@ -877,6 +1244,7 @@ class FogChessApp {
           slotIndex,
           powerupId,
           params,
+          timeRemainingMs: { ...this.game.timeRemainingMs },
         });
       }
 
@@ -945,6 +1313,9 @@ class FogChessApp {
         if (!piece || piece.color !== this.myColor || piece.type === PIECES.KING) {
           return false;
         }
+        if (this.targetingState.powerupId === 'feather' && piece.type === PIECES.KNIGHT) {
+          return false;
+        }
         if (
           (this.targetingState.powerupId === 'feather' ||
             this.targetingState.powerupId === 'ghost' ||
@@ -987,6 +1358,48 @@ class FogChessApp {
     }
   }
 
+  getInvalidPowerupTargetReason(r, c, visibleSquares) {
+    if (!this.targetingState) return 'Select a highlighted valid target square.';
+    const { powerupId } = this.targetingState;
+    const def = POWERUP_DEFS[powerupId];
+    if (!def) return 'Select a highlighted valid target square.';
+
+    if (!inBounds(r, c)) {
+      return `${def.icon} ${def.name}: Outer Refuge squares are exempt from direct targeting — select a highlighted board square.`;
+    }
+
+    const piece = this.game.board[r][c];
+    const oppColor = oppositeColor(this.myColor);
+
+    if (piece && piece.type === PIECES.KING) {
+      if (piece.color === this.myColor && (def.targetType === 'friendly_non_king' || def.targetType === 'two_friendly_non_king' || def.targetType === 'friendly_pawn')) {
+        return `🚫 ${def.icon} ${def.name} does not apply to the King (King is exempt)! Select a highlighted non-King piece.`;
+      }
+      if (piece.color === oppColor && def.targetType === 'enemy_non_king') {
+        return `🚫 ${def.icon} ${def.name} cannot target the enemy King (Enemy King is exempt)!`;
+      }
+    }
+
+    if (powerupId === 'armor' && piece && piece.color === this.myColor && piece.type !== PIECES.PAWN) {
+      return `🚫 ${def.icon} Pawn Armor: ${PIECE_NAMES[piece.type]}s are exempt! Only friendly Pawns can wear Armor.`;
+    }
+
+    if (powerupId === 'feather' && piece && piece.color === this.myColor && piece.type === PIECES.KNIGHT) {
+      return `🚫 ${def.icon} Feather Jump: Knights already jump in an L-shape and are exempt!`;
+    }
+
+    if (
+      piece &&
+      piece.color === this.myColor &&
+      this.game.isFrozen(r, c) &&
+      (powerupId === 'feather' || powerupId === 'ghost' || powerupId === 'refuge')
+    ) {
+      return `🚫 ${def.icon} ${def.name}: Frozen pieces are exempt and cannot use movement buffs this turn!`;
+    }
+
+    return `${def.icon} ${def.name}: Select a highlighted valid target square (${def.exemptText}).`;
+  }
+
   handleSquareClick(r, c) {
     if (this.game.winner || this.wheelAnimating) return;
 
@@ -1001,7 +1414,7 @@ class FogChessApp {
     if (this.targetingState) {
       const visibleSquares = this.game.getVisibleSquares(this.myColor);
       if (!this.isValidPowerupTarget(r, c, visibleSquares)) {
-        this.showToast('Select a highlighted valid target square (or click Cancel).', 'info');
+        this.showToast(this.getInvalidPowerupTargetReason(r, c, visibleSquares), 'info');
         return;
       }
 
@@ -1125,6 +1538,7 @@ class FogChessApp {
         promotionPiece,
         awardedPowerup: moveRecord.grantedPowerup,
         spawnedItem: moveRecord.spawnedItem,
+        timeRemainingMs: { ...this.game.timeRemainingMs },
       });
     }
 
@@ -1319,7 +1733,9 @@ class FogChessApp {
     this.renderHUD();
     this.renderMoveHistory();
     this.renderCaptured();
+    this.renderActiveRoomRules();
     this.syncPanicCountdown();
+    this.syncMatchClock();
   }
 
   renderInventory() {
@@ -1335,11 +1751,12 @@ class FogChessApp {
         const canActivateSlot = this.canUsePowerupSlot(i);
         const isTargetingThis = this.targetingState && this.targetingState.slotIndex === i;
         mySlotsHTML += `
-          <div class="powerup-slot slot-filled ${isTargetingThis ? 'slot-targeting' : ''}">
+          <div class="powerup-slot slot-filled ${isTargetingThis ? 'slot-targeting' : ''}" title="${def.fullDesc}">
             <div class="slot-icon">${def.icon}</div>
             <div class="slot-info">
               <div class="slot-name">${def.name}</div>
               <div class="slot-desc">${def.shortDesc}</div>
+              <div class="slot-exempt">🚫 ${def.exemptText}</div>
             </div>
             <button
               class="btn btn-xs ${isTargetingThis ? 'btn-accent' : 'btn-primary'} btn-use-powerup"
@@ -1386,21 +1803,21 @@ class FogChessApp {
       const def = POWERUP_DEFS[this.targetingState.powerupId];
       let prompt = `${def.icon} ${def.name}: `;
       if (def.targetType === 'empty_square') {
-        prompt += 'Click any highlighted empty square to drop a Stone Wall.';
+        prompt += `Click any highlighted empty square to drop a Stone Wall (${def.exemptText}).`;
       } else if (def.targetType === 'home_row_empty') {
         const pName = PIECE_NAMES[this.targetingState.resurrectPieceType] || 'piece';
-        prompt += `Click any highlighted empty square on your lowest row to revive your ${pName}.`;
+        prompt += `Click any highlighted empty square on your lowest row to revive your ${pName} (${def.exemptText}).`;
       } else if (def.targetType === 'friendly_pawn') {
-        prompt += 'Click one of your highlighted Pawns to equip persistent Armor.';
+        prompt += `Click one of your highlighted Pawns to equip persistent Armor (${def.exemptText}).`;
       } else if (def.targetType === 'friendly_non_king') {
-        prompt += 'Click one of your highlighted non-King pieces.';
+        prompt += `Click one of your highlighted pieces (${def.exemptText}).`;
       } else if (def.targetType === 'enemy_non_king') {
-        prompt += 'Click a highlighted enemy non-King piece to freeze.';
+        prompt += `Click a highlighted enemy piece to freeze (${def.exemptText}).`;
       } else if (def.targetType === 'two_friendly_non_king') {
         prompt +=
           this.targetingState.step === 1
-            ? 'Click the 1st friendly non-King piece to swap.'
-            : 'Now click the 2nd friendly non-King piece to complete the swap.';
+            ? `Click the 1st friendly piece to swap (${def.exemptText}).`
+            : `Now click the 2nd friendly piece to complete the swap (${def.exemptText}).`;
       }
       this.targetingTextEl.textContent = prompt;
       this.targetingBannerEl.classList.remove('hidden');
@@ -1436,7 +1853,10 @@ class FogChessApp {
       this.visibleCountBadge.textContent = `🌫️ Opponent Blinded (${t} turn${t > 1 ? 's' : ''} left) • Faded pieces hidden`;
       this.visibleCountBadge.className = 'sight-badge badge-opp-fogged';
     } else {
-      this.visibleCountBadge.textContent = `Full Vision • ${this.game.itemBoxes.size}/3 ? Boxes`;
+      const maxBoxes = this.game.getMaxBoardItems();
+      const winModeTag =
+        this.game.settings?.winRule === 'capture_king' ? '👑 Capture King' : 'Full Vision';
+      this.visibleCountBadge.textContent = `${winModeTag} • ${this.game.itemBoxes.size}/${maxBoxes} ? Boxes`;
       this.visibleCountBadge.className = 'sight-badge';
     }
 
